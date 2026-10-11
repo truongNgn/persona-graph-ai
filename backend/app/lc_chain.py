@@ -8,6 +8,7 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain_core.runnables.history import RunnableWithMessageHistory
 from app.config import settings
 from app.session_history import get_session_history
+from app.model_registry import model_registry, ModelInfo
 
 DEEPSEEK_BASE_URL = "https://api.deepseek.com/v1"
 
@@ -25,65 +26,131 @@ def normalize_provider(provider: str | None = None) -> str:
     return (provider or settings.llm_provider).lower().strip()
 
 
-def _resolve_model(model: str | None, provider: str) -> str:
+def resolve_model_info(model: str | None, provider: str | None) -> ModelInfo:
+    """Resolve model and provider parameters to a ModelInfo instance.
+
+    Handles model IDs, legacy provider names, and falls back to system defaults.
+    Also supports custom raw model names passed dynamically.
+    """
+    registry = model_registry
+    prov_clean = normalize_provider(provider)
+
     if model:
-        return model
-    if provider == "vllm":
-        return settings.vllm_large_model
-    if provider == "gemini":
-        return settings.gemini_model or "gemini-2.5-flash"
-    if provider == "deepseek":
-        return settings.deepseek_model
-    if provider == "qwen":
-        return settings.ollama_small_model
-    return settings.ollama_large_model
+        model_clean = model.strip()
+        # Direct lookup by model ID
+        info = registry.get(model_clean)
+        if info:
+            return info
 
+        # Lookup by raw model name
+        for m in registry.list_all():
+            if m.model.lower().strip() == model_clean.lower():
+                return m
 
-def resolve_router_models(provider: str | None = None) -> tuple[str, str]:
-    """
-    Cặp (large_model, small_model) mà HeuristicRouter được phép chọn.
+        # Fallback for dynamic/custom model strings not in catalog
+        runtime = "ollama"
+        deployment = "local"
+        if prov_clean == "gemini" or "gemini" in model_clean.lower():
+            runtime = "google-genai"
+            deployment = "cloud-api"
+        elif prov_clean == "deepseek" or prov_clean in {"llama_cpp", "vllm"} or "deepseek" in model_clean.lower():
+            runtime = "openai-compatible"
+            deployment = "cloud-api" if prov_clean == "deepseek" else "self-hosted"
 
-    Provider chỉ cấu hình một model (deepseek, gemini, qwen) thì hai giá trị
-    bằng nhau — router vẫn chạy nhưng không đổi model.
-    """
-    resolved_provider = normalize_provider(provider)
-    if resolved_provider == "vllm":
-        return settings.vllm_large_model, settings.vllm_small_model
-    if resolved_provider in ("ollama", ""):
-        return settings.ollama_large_model, settings.ollama_small_model
-    single = _resolve_model(None, resolved_provider)
-    return single, single
-
-
-def _build_llm(provider: str, model: str) -> BaseChatModel:
-    """Chat model của LangChain cho provider — mọi nhánh đều được LangSmith trace."""
-    if provider == "vllm":
-        return ChatOpenAI(
-            model=model,
-            base_url=settings.vllm_base_url,
-            api_key="not-needed",
-            streaming=True,
+        return ModelInfo(
+            id=f"dynamic:{model_clean}",
+            display_name=model_clean,
+            runtime=runtime,
+            model=model_clean,
+            deployment=deployment,
+            context_window=8192,
+            tier="large",
         )
-    if provider == "deepseek":
-        return ChatOpenAI(
-            model=model,
-            base_url=DEEPSEEK_BASE_URL,
-            api_key=settings.deepseek_api_key,
-            streaming=True,
-        )
-    if provider == "gemini":
+
+    # Resolve default model for provider/runtime
+    registered = registry.get(prov_clean)
+    if registered:
+        return registered
+
+    if prov_clean == "gemini":
+        return registry._get_required("gemini-flash")
+    elif prov_clean == "deepseek":
+        return registry._get_required("deepseek-chat")
+    elif prov_clean in {"llama_cpp", "vllm"}:
+        return registry._get_required("local-large")
+    elif prov_clean == "qwen":
+        return registry._get_required("ollama-small")
+    elif prov_clean == "ollama":
+        return registry._get_required("ollama-large")
+
+    # Fallback to system-configured provider
+    default_prov = settings.llm_provider.lower().strip()
+    if default_prov != prov_clean:
+        return resolve_model_info(None, default_prov)
+
+    return registry._get_required("ollama-large")
+
+
+def _build_llm(info: ModelInfo) -> BaseChatModel:
+    """Chat model của LangChain cho runtime — mọi nhánh đều được LangSmith trace."""
+    if info.runtime == "openai-compatible":
+        if info.id == "deepseek-chat" or "deepseek" in info.model.lower():
+            return ChatOpenAI(
+                model=info.model,
+                base_url=DEEPSEEK_BASE_URL,
+                api_key=settings.deepseek_api_key,
+                streaming=True,
+            )
+        else:
+            # Local OpenAI-compatible inference
+            return ChatOpenAI(
+                model=info.model,
+                base_url=settings.local_llm_base_url,
+                api_key="not-needed",
+                streaming=True,
+                max_tokens=settings.local_llm_max_tokens,
+            )
+    elif info.runtime == "google-genai":
         from langchain_google_genai import ChatGoogleGenerativeAI
 
         return ChatGoogleGenerativeAI(
-            model=model,
+            model=info.model,
             google_api_key=settings.gemini_api_key,
             streaming=True,
         )
+    # Default to ollama
     return ChatOllama(
-        model=model,
+        model=info.model,
         base_url=settings.ollama_host,
         keep_alive=settings.ollama_keep_alive,
     )
+
+
+def _build_llm_with_fallback(info: ModelInfo, visited: set[str] | None = None) -> BaseChatModel:
+    """Build the chat model and wrap it in fallback runnables if configured and compatible."""
+    if visited is None:
+        visited = set()
+    
+    visited.add(info.id)
+    primary = _build_llm(info)
+    
+    if info.fallback:
+        fallback_info = model_registry.get(info.fallback)
+        if fallback_info and fallback_info.id not in visited:
+            # Check environment compatibility for the fallback model
+            is_compatible = True
+            if settings.deployment_mode == "cloud" and fallback_info.deployment == "local":
+                is_compatible = False
+            for req in fallback_info.requires:
+                if not getattr(settings, req, None):
+                    is_compatible = False
+                    break
+                    
+            if is_compatible:
+                fallback_llm = _build_llm_with_fallback(fallback_info, visited)
+                return primary.with_fallbacks([fallback_llm])
+                
+    return primary
 
 
 def build_chain(
@@ -94,14 +161,14 @@ def build_chain(
     Build a RunnableWithMessageHistory chain for the selected provider/model.
 
     Pass provider=None to use LLM_PROVIDER from .env, model=None to use that
-    provider's default large model. Chains are cached per provider and model to
+    provider's default model. Chains are cached by resolved model ID to
     avoid recreating clients every turn.
     """
-    resolved_provider = normalize_provider(provider)
-    resolved_model = _resolve_model(model, resolved_provider)
-    cache_key = f"{resolved_provider}:{resolved_model}"
+    info = resolve_model_info(model, provider)
+    cache_key = info.id
+
     if cache_key not in _chain_cache:
-        base_chain = prompt | _build_llm(resolved_provider, resolved_model) | StrOutputParser()
+        base_chain = prompt | _build_llm_with_fallback(info) | StrOutputParser()
         _chain_cache[cache_key] = RunnableWithMessageHistory(
             base_chain,
             get_session_history,

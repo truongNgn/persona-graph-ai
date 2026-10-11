@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import { API_BASE_URL } from '../config/backend'
-import type { AudioChunkPayload, AuthUser, Character, CharactersResponse, ChatMessage, ConversationDetail, ConversationSummary, Emotion, LlmProvider, Project, Session, WarmupStatus, WsStatus } from '../types'
+import type { AudioChunkPayload, AuthUser, Character, CharactersResponse, ChatMessage, ConversationDetail, ConversationSummary, Emotion, LlmProvider, Project, Session, WarmupStatus, WsStatus, ModelsCatalog } from '../types'
 
 const MAX_SESSIONS = 100 // Increased for better project management
 const SESSIONS_KEY = 'chatbot_sessions'
@@ -10,6 +10,20 @@ const ROUTER_KEY = 'chatbot_router_enabled'
 const AUTO_SEND_VOICE_KEY = 'chatbot_auto_send_voice_transcript'
 const AUTH_TOKEN_KEY = 'chatbot_auth_token'
 const AUTH_USER_KEY = 'chatbot_auth_user'
+const MODEL_KEY = 'chatbot_llm_provider'
+
+function loadLlmProvider(): string {
+  try {
+    const saved = localStorage.getItem(MODEL_KEY) ?? 'llama_cpp'
+    const migrated: Record<string, string> = {
+      vllm: 'llama_cpp', 'vllm-large': 'local-large', 'vllm-small': 'local-small',
+    }
+    return migrated[saved] ?? saved
+  } catch {
+    return 'llama_cpp'
+  }
+}
+
 function generateTitle(text: string): string {
   const words = text.trim().split(/\s+/).slice(0, 8).join(' ')
   return words.length > 0 ? words : 'New Chat'
@@ -163,6 +177,8 @@ interface ChatState {
 
   // LLM provider
   llmProvider: LlmProvider
+  modelsCatalog: ModelsCatalog | null
+  fetchModelsCatalog: () => Promise<void>
 
   // TTS toggle
   ttsEnabled: boolean
@@ -205,6 +221,7 @@ interface ChatState {
   setAuth: (token: string, user: AuthUser) => void
   logout: () => void
   login: (email: string, password: string) => Promise<boolean>
+  devLogin: () => Promise<boolean>
   loginGoogle: (credential: string) => Promise<boolean>
   register: (email: string, password: string, displayName?: string) => Promise<boolean>
   refreshServerConversations: () => Promise<void>
@@ -246,7 +263,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
   currentVoice: '',
   characters: [],
   currentCharacterId: '',
-  llmProvider: 'ollama',
+  llmProvider: loadLlmProvider(),
+  modelsCatalog: null,
   ttsEnabled: loadTtsEnabled(),
   routerEnabled: loadRouterEnabled(),
   autoSendVoiceTranscript: loadAutoSendVoiceTranscript(),
@@ -385,7 +403,36 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }
   },
 
-  setLlmProvider: (provider) => set({ llmProvider: provider }),
+  setLlmProvider: (provider) => {
+    set({ llmProvider: provider })
+    try { localStorage.setItem(MODEL_KEY, provider) } catch {}
+  },
+
+  fetchModelsCatalog: async () => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/llm/models`)
+      if (!response.ok) return
+      const data = (await response.json()) as ModelsCatalog
+      set({ modelsCatalog: data })
+      
+      const flatModels = data.groups.flatMap((g) => g.models.map((m) => m.id))
+      const current = get().llmProvider
+      
+      const aliases: Record<string, string[]> = {
+        ollama: ['ollama-large', 'ollama-small'], qwen: ['ollama-small'],
+        llama_cpp: ['local-large', 'local-small'],
+        vllm: ['local-large', 'local-small'], deepseek: ['deepseek-chat'], gemini: ['gemini-flash'],
+      }
+      const exists = flatModels.includes(current) || (aliases[current]?.some((id) => flatModels.includes(id)) ?? false)
+      if (!exists && flatModels.length > 0) {
+        const fallback = flatModels.includes(data.default) ? data.default : flatModels[0]
+        console.warn(`[chatStore] Model '${current}' is not available. Falling back to default: '${fallback}'`)
+        get().setLlmProvider(fallback)
+      }
+    } catch (error) {
+      console.error('[chatStore] Failed to fetch models catalog', error)
+    }
+  },
 
   setTtsEnabled: (val) => {
     set({ ttsEnabled: val })
@@ -421,6 +468,26 @@ export const useChatStore = create<ChatState>((set, get) => ({
       authError: null,
     })
     saveSessions([])
+  },
+
+  devLogin: async () => {
+    set({ authLoading: true, authError: null })
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/auth/dev-login`, { method: 'POST' })
+      if (!response.ok) {
+        const error = await response.json().catch(() => null) as { detail?: string } | null
+        throw new Error(error?.detail || 'Development login failed')
+      }
+      const payload = await response.json() as { access_token: string; user: AuthUser }
+      get().setAuth(payload.access_token, payload.user)
+      await get().refreshServerConversations()
+      return true
+    } catch (error) {
+      set({ authError: error instanceof Error ? error.message : 'Development login failed' })
+      return false
+    } finally {
+      set({ authLoading: false })
+    }
   },
 
   login: async (email, password) => {

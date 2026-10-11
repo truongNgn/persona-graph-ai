@@ -10,6 +10,7 @@ from fastapi import WebSocket, WebSocketDisconnect
 
 from app.auth import websocket_auth_context
 from app.config import settings
+from app.model_availability import is_model_available
 from app.gateway.schemas import ChatRequest, parse_client_message
 from app.models import ErrorPayload
 from app.orchestrator import Orchestrator, TurnOrchestrator
@@ -132,7 +133,51 @@ async def websocket_chat(websocket: WebSocket) -> None:
 
             elif message.type == "set_model":
                 await _cancel_current()
-                current_provider = message.provider or settings.llm_provider
+                model_or_provider = message.provider or settings.llm_provider
+                
+                from app.model_registry import model_registry
+                
+                try:
+                    large_info, small_info = model_registry.get_models_for_provider(model_or_provider)
+                except Exception as exc:
+                    await websocket.send_text(json.dumps({
+                        "type": "error",
+                        "message": f"Model or provider '{model_or_provider}' is not registered."
+                    }))
+                    continue
+
+                error_msg = None
+                # Validate both models (large and small) for the selected option
+                for info in (large_info, small_info):
+                    # Check 1: deployment mode compatibility
+                    if settings.deployment_mode == "cloud" and info.deployment == "local":
+                        error_msg = f"Model '{info.id}' is only available locally, not in cloud mode."
+                        break
+
+                    # Check 2: required credentials
+                    for req in info.requires:
+                        if not getattr(settings, req, None):
+                            error_msg = f"Missing API key '{req}' for model '{info.id}'."
+                            break
+                    if error_msg:
+                        break
+
+                    # Check 3: reachability ping
+                    reachable = await is_model_available(info)
+
+                    if not reachable:
+                        error_msg = f"Model '{info.model}' is not served by its runtime endpoint."
+                        break
+
+                if error_msg:
+                    logger.warning("Preflight failed for '%s': %s", model_or_provider, error_msg)
+                    await websocket.send_text(json.dumps({
+                        "type": "error",
+                        "message": f"Cannot switch model: {error_msg}"
+                    }))
+                    continue
+
+                current_provider = model_or_provider
                 turn_orchestrator = _build_turn_orchestrator(tts, current_provider)
                 logger.info("LLM provider switched to '%s' for %s", current_provider, client)
                 await websocket.send_text(json.dumps({

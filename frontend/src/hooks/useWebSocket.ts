@@ -86,8 +86,13 @@ export function useWebSocket(onClearQueue?: () => void) {
           break
 
         case 'connected':
-          setLlmProvider(msg.provider)
           setWarmupStatus(msg.warmup ?? null)
+          const activeLlm = useChatStore.getState().llmProvider
+          if (activeLlm && activeLlm !== msg.provider) {
+            ws.send(JSON.stringify({ type: 'set_model', provider: activeLlm }))
+          } else {
+            setLlmProvider(msg.provider)
+          }
           break
 
         case 'model_changed':

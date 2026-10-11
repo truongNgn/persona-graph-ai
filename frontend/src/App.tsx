@@ -46,6 +46,7 @@ function AuthenticatedApp() {
 
   useEffect(() => {
     void useChatStore.getState().fetchCharacters()
+    void useChatStore.getState().fetchModelsCatalog()
   }, [])
 
   // New session: update store + reconnect WS với sessionId mới không cần thiết

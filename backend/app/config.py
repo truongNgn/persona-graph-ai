@@ -2,6 +2,7 @@ import os
 from pathlib import Path
 
 from dotenv import load_dotenv
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -10,7 +11,7 @@ ENV_FILE = BACKEND_ROOT / ".env"
 
 # Providers hợp lệ cho LLM_PROVIDER và cho message "set_model" từ WebSocket.
 # "qwen" là bí danh của Ollama chạy small model — giữ lại cho frontend hiện tại.
-SUPPORTED_LLM_PROVIDERS = ("ollama", "qwen", "vllm", "deepseek", "gemini")
+SUPPORTED_LLM_PROVIDERS = ("ollama", "qwen", "llama_cpp", "vllm", "deepseek", "gemini")
 
 # LangSmith auto-tracing reads os.environ directly. BaseSettings parses .env
 # into the settings object, but it does not export unknown keys for LangChain.
@@ -18,19 +19,25 @@ load_dotenv(ENV_FILE, override=False)
 
 
 class Settings(BaseSettings):
-    # LLM Provider selection: "ollama" | "vllm" | "deepseek" | "gemini"
-    llm_provider: str = "ollama"
+    # LLM Provider selection: "llama_cpp" | "ollama" | "vllm" | "deepseek" | "gemini"
+    llm_provider: str = "llama_cpp"
 
-    # TTS Provider selection: "elevenlabs" | "google-cloud" | "xtts" | ""
+    # Deployment mode: "local" | "cloud"
+    deployment_mode: str = "local"
+
+    # TTS Provider selection: "kokoro" | "elevenlabs" | "google-cloud" | "gcp-custom" | "xtts" | ""
     tts_provider: str = ""
+    kokoro_tts_url: str = "http://localhost:8880/synthesize"
+    kokoro_tts_timeout_seconds: float = 60.0
 
-    # vLLM OpenAI-compatible server
-    vllm_base_url: str = "http://localhost:8080/v1"
-    vllm_large_model: str = "Meta-Llama-3.1-8B-Instruct-Q4_K_M"
-    vllm_small_model: str = "Meta-Llama-3.1-8B-Instruct-Q4_K_M"
+    # Local OpenAI-compatible server; legacy environment names remain supported
+    local_llm_base_url: str = Field("http://localhost:8080/v1", validation_alias=AliasChoices("LOCAL_LLM_BASE_URL", "VLLM_BASE_URL"))
+    local_llm_large_model: str = Field("persona-qwen", validation_alias=AliasChoices("LOCAL_LLM_LARGE_MODEL", "VLLM_LARGE_MODEL"))
+    local_llm_small_model: str = Field("persona-qwen", validation_alias=AliasChoices("LOCAL_LLM_SMALL_MODEL", "VLLM_SMALL_MODEL"))
+    local_llm_max_tokens: int = Field(512, ge=1, le=512, validation_alias=AliasChoices("LOCAL_LLM_MAX_TOKENS", "VLLM_MAX_TOKENS"))
  
     # Ollama
-    ollama_host: str = "http://localhost:11434"
+    ollama_host: str = "http://localhost:11435"
     ollama_model: str = "llama3.1:latest"       # legacy alias — dùng ollama_large_model
     ollama_large_model: str = "llama3.1:latest"
     ollama_small_model: str = "qwen2.5:1.5b"
@@ -69,11 +76,11 @@ class Settings(BaseSettings):
 
     # Speech-to-Text (mic input Stage 3)
     stt_enabled: bool = False
-    stt_provider: str = "faster-whisper"   # "faster-whisper" | "openai" | "none"
-    stt_model: str = "base"                # faster-whisper: tiny/base/small/... | openai: whisper-1/gpt-4o-mini-transcribe
+    stt_provider: str = "faster-whisper"   # "faster-whisper" | "none"
+    stt_model: str = "base"                # multilingual tiny/base/small/...
     stt_language: str = "vi"               # "vi" | "en" | "" for auto-detect
-    stt_device: str = "cuda"               # "cuda" | "cpu"
-    stt_compute_type: str = "float16"      # "float16" | "int8" | "float32"
+    stt_device: str = "cpu"                # "cuda" | "cpu"
+    stt_compute_type: str = "int8"         # "float16" | "int8" | "float32"
     stt_max_file_mb: int = 10
     stt_max_duration_seconds: int = 60
 
@@ -134,6 +141,7 @@ class Settings(BaseSettings):
     auth_token_secret: str = "change-me-dev-secret"
     auth_token_expire_minutes: int = 1440
     auth_dev_user_id: str = "dev_user"
+    dev_quick_login_enabled: bool = False
     max_ws_message_bytes: int = 32768
     max_rest_request_bytes: int = 10485760
     rate_limit_enabled: bool = True
@@ -164,6 +172,7 @@ class Settings(BaseSettings):
         env_file=ENV_FILE,
         env_file_encoding="utf-8",
         case_sensitive=False,
+        populate_by_name=True,
         extra="ignore",          # bỏ qua env vars không khai báo trong Settings
     )
 

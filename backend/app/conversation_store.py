@@ -5,12 +5,14 @@ from __future__ import annotations
 import hashlib
 import hmac
 import os
+import time
 from dataclasses import dataclass
 from typing import Literal
 
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.dialects.postgresql import insert
 
 from app.db import async_session_factory
 from app.db_models import Conversation, Message, User
@@ -145,6 +147,28 @@ async def get_user(user_id: str) -> User | None:
         return await session.get(User, user_id)
 
 
+DEV_QUICK_LOGIN_USER_ID = "00000000-0000-4000-8000-000000000001"
+DEV_QUICK_LOGIN_EMAIL = "dev-quick-login@localhost.invalid"
+
+
+async def get_or_create_dev_user() -> User:
+    """Reuse a dedicated test identity; concurrent clicks create only one row."""
+    async with async_session_factory() as session:
+        await session.execute(
+            insert(User).values(
+                id=DEV_QUICK_LOGIN_USER_ID,
+                email=DEV_QUICK_LOGIN_EMAIL,
+                display_name="Dev Tester",
+                password_hash="dev_quick_login_no_password",
+            ).on_conflict_do_nothing(index_elements=[User.id])
+        )
+        await session.commit()
+        user = await session.get(User, DEV_QUICK_LOGIN_USER_ID)
+        if user is None or user.email != DEV_QUICK_LOGIN_EMAIL or user.password_hash != "dev_quick_login_no_password":
+            raise ValueError("The reserved development identity is unavailable.")
+        return user
+
+
 async def get_or_create_google_user(email: str, display_name: str | None) -> User:
     async with async_session_factory() as session:
         user = await session.scalar(select(User).where(User.email == email.lower()))
@@ -213,7 +237,7 @@ async def append_message(
                 character_id=character_id,
                 title_seed=content if role == "human" else None,
             )
-            now_time = _now()
+            now_time = time.time()
             message = Message(
                 conversation_id=conversation.id,
                 role=role,

@@ -8,7 +8,7 @@ python-dotenv==1.0.1
 elevenlabs==1.50.3
 openai>=1.54.0
 python-multipart>=0.0.12
-SQLAlchemy>=2.0.32
+SQLAlchemy[asyncio]>=2.0.32
 asyncpg>=0.29.0
 
 # Coqui XTTS-v2 local voice cloning (Python 3.12 compatible)
@@ -18,6 +18,7 @@ soundfile>=0.12.1
 
 # Speech-to-Text (mic input Stage 3)
 faster-whisper>=1.0.3
+av>=11,<19
 ffmpeg-python>=0.2.0
 
 # Hybrid Memory — BM25 sparse retrieval (Upgrade 1)

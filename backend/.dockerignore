@@ -6,6 +6,15 @@ __pycache__/
 venv/
 *.egg-info/
 .pytest_cache/
+.pytest-tmp/
+.uv-cache/
+venv_vllm/
+chroma_data/
+lore_data/
+data/
+avatars/
+voices/
+rhubarb/
 .mypy_cache/
 logs/
 *.log

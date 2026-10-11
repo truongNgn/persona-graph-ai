@@ -22,6 +22,7 @@ from app.conversation_store import (
     delete_conversation,
     get_conversation_detail,
     get_or_create_google_user,
+    get_or_create_dev_user,
     get_user,
     list_conversations,
     user_public_dict,
@@ -34,7 +35,11 @@ from app.rate_limit import RateLimitMiddleware
 from app.session_history import session_history_ready
 from app.stt_handler import BaseSTTHandler, get_stt_handler, validate_audio_upload
 from app.tts_handler import BaseTTSHandler, get_tts_handler
+import httpx
 from app.warmup import start_background_warmup, warmup_state
+from app.model_registry import model_registry
+from app.model_availability import is_model_available
+from app.lc_chain import resolve_model_info
 
 logging.basicConfig(
     level=settings.log_level.upper(),
@@ -50,6 +55,31 @@ SUPPORTED_AVATAR_SUFFIXES = {".glb"}
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # ── Startup Guard Secrets Check (Stage 9) ──────────────────────────────────
+    if settings.deployment_mode == "cloud":
+        missing_keys = []
+        if not settings.gemini_api_key:
+            missing_keys.append("GEMINI_API_KEY")
+        if not settings.deepseek_api_key:
+            missing_keys.append("DEEPSEEK_API_KEY")
+        if settings.auth_token_secret == "change-me-dev-secret":
+            missing_keys.append("AUTH_TOKEN_SECRET (cannot be the default 'change-me-dev-secret')")
+        if missing_keys:
+            error_msg = f"Startup Guard: Missing required cloud secrets/keys: {', '.join(missing_keys)} in deployment_mode='cloud'."
+            logger.critical(error_msg)
+            raise ValueError(error_msg)
+    else:
+        missing_keys = []
+        if not settings.gemini_api_key:
+            missing_keys.append("GEMINI_API_KEY")
+        if not settings.deepseek_api_key:
+            missing_keys.append("DEEPSEEK_API_KEY")
+        if missing_keys:
+            logger.warning(
+                "Startup Guard: Missing API keys in local mode: %s. Cloud models will not be functional.",
+                ", ".join(missing_keys),
+            )
+
     # ── LangSmith Observability status check ──────────────────────────────────
     import os
     tracing_enabled = os.environ.get("LANGCHAIN_TRACING_V2") or os.environ.get("LANGSMITH_TRACING")
@@ -183,9 +213,30 @@ async def readiness():
             "configured": bool(settings.database_url),
             "ready": database_ok,
         },
-        "tts": {"provider": tts.provider_name, "ready": tts.is_active},
+        "tts": {"provider": tts.provider_name, "ready": await tts.health_check() if hasattr(tts, "health_check") else tts.is_active},
         "warmup": warmup_state.to_dict(),
     }
+
+
+def dev_quick_login_available() -> bool:
+    return settings.deployment_mode == "local" and settings.dev_quick_login_enabled
+
+
+@app.get("/api/auth/dev-status")
+async def dev_login_status() -> dict[str, bool]:
+    return {"enabled": dev_quick_login_available()}
+
+
+@app.post("/api/auth/dev-login")
+async def dev_login():
+    if not dev_quick_login_available():
+        raise HTTPException(status_code=404, detail="Development login is disabled.")
+    try:
+        user = await get_or_create_dev_user()
+    except Exception as exc:
+        logger.error("Development login account unavailable: %s", exc)
+        raise HTTPException(status_code=503, detail="Development account is unavailable. Please retry.") from exc
+    return {"access_token": issue_dev_token(user.id), "token_type": "bearer", "user": user_public_dict(user)}
 
 
 @app.post("/api/auth/register")
@@ -287,6 +338,15 @@ async def remove_conversation(
 @app.get("/api/voices")
 async def get_voices(auth: AuthContext = Depends(get_request_auth_context)):
     voices = []
+    if settings.tts_provider == "kokoro":
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                response = await client.get(settings.kokoro_tts_url.rsplit("/", 1)[0] + "/voices")
+                response.raise_for_status()
+                return {"voices": response.json()["voices"], "provider": "kokoro", "supports_voice_cloning": False}
+        except Exception as exc:
+            logger.warning("Kokoro voice discovery failed: %s", exc)
+            return {"voices": ["af_bella", "am_michael"], "provider": "kokoro", "supports_voice_cloning": False}
 
     if settings.gcs_bucket_name:
         try:
@@ -454,16 +514,108 @@ async def upload_character_avatar(
     return {"avatar": f"{base}/static/avatars/{auth.user_id}/{character_id}.glb"}
 
 
-@app.get("/api/models")
-async def get_models():
+@app.get("/api/avatars")
+async def get_avatars():
     models_dir = PROJECT_ROOT / "frontend" / "public" / "models"
     if not models_dir.exists():
-        return {"models": []}
-    models = sorted(
+        return {"avatars": []}
+    avatars = sorted(
         f.name for f in models_dir.iterdir()
         if f.is_file() and f.suffix.lower() == ".glb"
     )
-    return {"models": models}
+    return {"avatars": avatars}
+
+
+@app.get("/api/llm/models")
+async def get_llm_models():
+    # 1. Discover local models (populates registry with local Ollama models if in local mode)
+    if settings.deployment_mode == "local":
+        await model_registry.discover_local_models()
+
+    # Get candidate models
+    candidates = model_registry.list_all()
+
+    # Filter and check reachability concurrently
+    tasks = []
+    filtered_candidates = []
+    for info in candidates:
+        # Condition 1: deployment mode check
+        if settings.deployment_mode == "cloud" and info.deployment == "local":
+            continue
+
+        # Condition 2: requires keys check
+        has_requires = True
+        for req in info.requires:
+            if not getattr(settings, req, None):
+                has_requires = False
+                break
+        if not has_requires:
+            continue
+
+        filtered_candidates.append(info)
+        tasks.append(is_model_available(info))
+
+    reachability_results = await asyncio.gather(*tasks)
+
+    # Group the models
+    groups_dict = {
+        "cloud-api": {"label": "Cloud API", "models": []},
+        "self-hosted": {"label": "Self-hosted", "models": []},
+        "local": {"label": "Local (Ollama)", "models": []},
+    }
+
+    reachable_models = [info for info, reachable in zip(filtered_candidates, reachability_results) if reachable]
+
+    # Deduplicate local models: if a model was dynamically discovered (id starts with "ollama:"),
+    # hide the static catalog models ("ollama-large", "ollama-small") with the same underlying model name.
+    discovered_model_names = {
+        info.model.lower().strip() for info in reachable_models
+        if info.id.startswith("ollama:")
+    }
+
+    final_models = []
+    for info in reachable_models:
+        if info.id in ("ollama-large", "ollama-small") and info.model.lower().strip() in discovered_model_names:
+            continue
+        final_models.append(info)
+
+    seen_self_hosted: set[str] = set()
+    for info in final_models:
+        if info.deployment == "self-hosted":
+            if info.model in seen_self_hosted:
+                continue
+            seen_self_hosted.add(info.model)
+        dep = info.deployment
+        if dep in groups_dict:
+            groups_dict[dep]["models"].append({
+                "id": info.id,
+                "display_name": info.display_name,
+                "tier": info.tier,
+            })
+
+    # Remove empty groups
+    groups = [g for g in groups_dict.values() if g["models"]]
+
+    # Get default model ID
+    try:
+        default_model = resolve_model_info(None, None).id
+    except Exception:
+        default_model = "local-large"
+
+    # If the default model ID is one of the skipped static models, map it to the discovered model ID
+    if default_model in ("ollama-large", "ollama-small"):
+        static_info = model_registry.get(default_model)
+        if static_info:
+            target_model_name = static_info.model.lower().strip()
+            for info in final_models:
+                if info.id.startswith("ollama:") and info.model.lower().strip() == target_model_name:
+                    default_model = info.id
+                    break
+
+    return {
+        "default": default_model,
+        "groups": groups,
+    }
 
 
 @app.get("/api/stt/status")
@@ -475,6 +627,7 @@ async def get_stt_status():
         "language": settings.stt_language or None,
         "max_file_mb": settings.stt_max_file_mb,
         "max_duration_seconds": settings.stt_max_duration_seconds,
+        "message": getattr(stt, "reason", None),
     }
 
 
@@ -485,10 +638,10 @@ async def transcribe_audio(
 ):
     stt: BaseSTTHandler = app.state.stt_handler
     if not stt.is_active:
-        raise HTTPException(status_code=503, detail="STT is not enabled.")
+        raise HTTPException(status_code=503, detail=getattr(stt, "reason", "STT is not enabled."))
 
     resolved_mime_type = mime_type or audio.content_type or ""
-    audio_bytes = await audio.read()
+    audio_bytes = await audio.read(settings.stt_max_file_mb * 1024 * 1024 + 1)
     try:
         validate_audio_upload(audio_bytes, resolved_mime_type)
         result = await stt.transcribe(audio_bytes, resolved_mime_type)

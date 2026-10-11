@@ -98,7 +98,7 @@ export interface ChatMessage {
 
 export type WsStatus = 'connecting' | 'open' | 'closed' | 'error'
 
-export type LlmProvider = 'ollama' | 'deepseek' | 'qwen' | 'gemini'
+export type LlmProvider = string
 
 export interface SetModelPayload {
   type: 'set_model'
@@ -171,4 +171,20 @@ export interface ConversationMessage {
 export interface ConversationDetail {
   conversation: ConversationSummary
   messages: ConversationMessage[]
+}
+
+export interface ModelInfo {
+  id: string
+  display_name: string
+  tier: string
+}
+
+export interface ModelGroup {
+  label: string
+  models: ModelInfo[]
+}
+
+export interface ModelsCatalog {
+  default: string
+  groups: ModelGroup[]
 }
