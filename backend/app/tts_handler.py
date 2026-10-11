@@ -319,6 +319,34 @@ class KokoroTTSHandler(GCPCustomTTSHandler):
         await self.synthesize(SentenceChunk(text="Hello.", emotion=Emotion.neutral))
 
 
+class ChatterboxNanoTTSHandler(KokoroTTSHandler):
+    """Clone uploaded voices; use Kokoro presets when no reference or on failure."""
+
+    def __init__(self) -> None:
+        GCPCustomTTSHandler.__init__(self, url=settings.chatterbox_tts_url, api_key="",
+                                    timeout=settings.chatterbox_tts_timeout_seconds)
+        self._fallback = KokoroTTSHandler()
+
+    @property
+    def provider_name(self) -> str:
+        return "chatterbox-nano+kokoro"
+
+    async def synthesize(self, chunk: SentenceChunk) -> bytes:
+        if chunk.voice and "/" in chunk.voice:
+            try:
+                return await GCPCustomTTSHandler.synthesize(self, chunk)
+            except Exception:
+                logger.warning("Nano unavailable; using Kokoro for this sentence.")
+            chunk = chunk.model_copy(update={"voice": "af_bella"})
+        return await self._fallback.synthesize(chunk)
+
+    async def health_check(self) -> bool:
+        return await super().health_check() or await self._fallback.health_check()
+
+    async def warmup(self) -> None:
+        await self._fallback.warmup()
+
+
 # Coqui XTTS-v2: local voice cloning
 # ---------------------------------------------------------------------------
 
@@ -531,7 +559,9 @@ class FallbackTTSHandler(BaseTTSHandler):
 
 def get_tts_handler() -> BaseTTSHandler:
     provider = settings.tts_provider.lower().strip()
-    if provider == "kokoro":
+    if provider == "chatterbox-nano":
+        return ChatterboxNanoTTSHandler()
+    elif provider == "kokoro":
         return KokoroTTSHandler()
     elif provider == "google-cloud":
         logger.info("TTS: Google Cloud Text-to-Speech (voice=%s)", settings.google_tts_voice_name)

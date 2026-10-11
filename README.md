@@ -52,7 +52,7 @@ port 8001. Optional complete container deployment:
 ./scripts/wsl-compose.ps1 --profile app up -d --build
 ```
 
-Local speech uses **Kokoro v1.0 INT8 ONNX on CPU**, with no GPU allocation or
+Local preset speech uses **Kokoro v1.0 INT8 ONNX on CPU**, with no GPU allocation or
 cloud billing dependency. The app profile starts the `kokoro` service on
 `http://localhost:8880`; the backend connects internally to
 `http://kokoro:8080/synthesize`. Native Windows backend configuration uses
@@ -70,6 +70,41 @@ falls back to text if speech fails.
 ./scripts/wsl-compose.ps1 logs --tail 40 kokoro
 Invoke-RestMethod http://localhost:8880/health
 ```
+
+English voice cloning uses **Chatterbox-Nano on CPU**, with Kokoro retained for
+preset voices and synthesis failures. The `app` profile starts Nano at
+`http://localhost:8881`, persists its pinned model files in `chatterbox_models`,
+and shares reference recordings through `voice_samples`. Nano is limited to four
+CPU cores and 4 GiB RAM. Its complete checkpoints occupy about 1.9 GiB on disk;
+the published 110M label does not describe the full deployment's disk/RAM needs.
+
+In **Avatar & Voice Options**, choose **Record my voice (12 seconds)** or upload
+a clean 10–15 second English recording. Clips must be longer than 5 seconds and
+at most 30 seconds, with a 10 MB upload limit. The backend converts the clip to
+mono PCM16 WAV and automatically selects it. Click **Preview voice**, enable TTS,
+and send a message. Uploaded voices are scoped to your login, survive container
+recreation, and reuse cached conditioning across sentences. Preview reports
+errors instead of substituting a different speaker; chat uses Kokoro on failure.
+
+The first start downloads model files; the UI reports loading/unavailability
+while preset speech remains usable. The local benchmark generated 2.88 seconds
+of audio in 17.4 seconds on the first reference request, then 2.6 seconds in
+4.2 seconds with caching. Nano used about 3 GiB RAM. Voice cloning works on this
+laptop, but CPU generation is slower than real time and has more latency than
+Kokoro. The default character voices remain Kokoro presets until you select a
+recording.
+
+```powershell
+./scripts/wsl-compose.ps1 --profile app up -d --build
+Invoke-RestMethod http://localhost:8881/health
+./scripts/wsl-compose.ps1 logs --tail 40 chatterbox
+```
+
+`wsl-compose.ps1 up` starts a managed hidden WSL keep-alive to prevent idle VM
+shutdown from interrupting model downloads or inference. `down` stops that
+helper. Native Windows backend configuration uses `TTS_PROVIDER=chatterbox-nano`
+and `CHATTERBOX_TTS_URL=http://localhost:8881/synthesize`. Model code and model
+revisions are pinned in `chatterbox-service/`. Standard Nano cloning is English.
 
 The container backend is exposed at port 8001 and frontend at port 8088.
 For a one-click test login, set `DEV_QUICK_LOGIN_ENABLED=true` in `backend/.env`

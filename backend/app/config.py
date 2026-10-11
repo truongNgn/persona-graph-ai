@@ -25,10 +25,13 @@ class Settings(BaseSettings):
     # Deployment mode: "local" | "cloud"
     deployment_mode: str = "local"
 
-    # TTS Provider selection: "kokoro" | "elevenlabs" | "google-cloud" | "gcp-custom" | "xtts" | ""
+    # TTS: "chatterbox-nano" | "kokoro" | "elevenlabs" | "google-cloud" | "gcp-custom" | "xtts" | ""
     tts_provider: str = ""
     kokoro_tts_url: str = "http://localhost:8880/synthesize"
     kokoro_tts_timeout_seconds: float = 60.0
+    chatterbox_tts_url: str = "http://localhost:8881/synthesize"
+    chatterbox_tts_timeout_seconds: float = 90.0
+    voice_max_file_mb: int = 10
 
     # Local OpenAI-compatible server; legacy environment names remain supported
     local_llm_base_url: str = Field("http://localhost:8080/v1", validation_alias=AliasChoices("LOCAL_LLM_BASE_URL", "VLLM_BASE_URL"))

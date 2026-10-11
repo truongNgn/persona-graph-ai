@@ -52,6 +52,10 @@ def parse_client_message(data: dict, authenticated_user_id: str | None = None) -
 
         character_id = str(data.get("character_id", settings.default_character_id))
         voice = data.get("voice", None)
+        if settings.tts_provider == "chatterbox-nano" and voice and "/" in str(voice):
+            from app.voice_references import owns_voice_reference
+            if not owns_voice_reference(str(voice), authenticated_user_id):
+                return MessageParseResult(type="user_message", error="Voice recording belongs to another user or is invalid.")
         if not voice:
             character = character_registry.get(character_id)
             if character:
