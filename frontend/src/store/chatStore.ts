@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import { API_BASE_URL } from '../config/backend'
-import type { AudioChunkPayload, AuthUser, ChatMessage, ConversationDetail, ConversationSummary, Emotion, LlmProvider, Project, Session, WarmupStatus, WsStatus } from '../types'
+import type { AudioChunkPayload, AuthUser, Character, CharactersResponse, ChatMessage, ConversationDetail, ConversationSummary, Emotion, LlmProvider, Project, Session, WarmupStatus, WsStatus, ModelsCatalog } from '../types'
 
 const MAX_SESSIONS = 100 // Increased for better project management
 const SESSIONS_KEY = 'chatbot_sessions'
@@ -10,6 +10,20 @@ const ROUTER_KEY = 'chatbot_router_enabled'
 const AUTO_SEND_VOICE_KEY = 'chatbot_auto_send_voice_transcript'
 const AUTH_TOKEN_KEY = 'chatbot_auth_token'
 const AUTH_USER_KEY = 'chatbot_auth_user'
+const MODEL_KEY = 'chatbot_llm_provider'
+
+function loadLlmProvider(): string {
+  try {
+    const saved = localStorage.getItem(MODEL_KEY) ?? 'llama_cpp'
+    const migrated: Record<string, string> = {
+      vllm: 'llama_cpp', 'vllm-large': 'local-large', 'vllm-small': 'local-small',
+    }
+    return migrated[saved] ?? saved
+  } catch {
+    return 'llama_cpp'
+  }
+}
+
 function generateTitle(text: string): string {
   const words = text.trim().split(/\s+/).slice(0, 8).join(' ')
   return words.length > 0 ? words : 'New Chat'
@@ -157,8 +171,14 @@ interface ChatState {
   currentModel: string
   currentVoice: string
 
+  // Character roleplay (multi-character brain — see docs/RAG_character_roleplay_implementation_plan.md Stage 7)
+  characters: Character[]
+  currentCharacterId: string
+
   // LLM provider
   llmProvider: LlmProvider
+  modelsCatalog: ModelsCatalog | null
+  fetchModelsCatalog: () => Promise<void>
 
   // TTS toggle
   ttsEnabled: boolean
@@ -190,6 +210,9 @@ interface ChatState {
   setCurrentEmotion: (emotion: Emotion) => void
   setCurrentModel: (model: string) => void
   setCurrentVoice: (voice: string) => void
+  fetchCharacters: () => Promise<void>
+  setCharacter: (characterId: string) => void
+  loadCharacterAvatarOverride: (characterId: string) => Promise<void>
   setLlmProvider: (provider: LlmProvider) => void
   setTtsEnabled: (val: boolean) => void
   setRouterEnabled: (val: boolean) => void
@@ -198,6 +221,7 @@ interface ChatState {
   setAuth: (token: string, user: AuthUser) => void
   logout: () => void
   login: (email: string, password: string) => Promise<boolean>
+  devLogin: () => Promise<boolean>
   loginGoogle: (credential: string) => Promise<boolean>
   register: (email: string, password: string, displayName?: string) => Promise<boolean>
   refreshServerConversations: () => Promise<void>
@@ -237,7 +261,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
   currentEmotion: 'neutral',
   currentModel: '',
   currentVoice: '',
-  llmProvider: 'ollama',
+  characters: [],
+  currentCharacterId: '',
+  llmProvider: loadLlmProvider(),
+  modelsCatalog: null,
   ttsEnabled: loadTtsEnabled(),
   routerEnabled: loadRouterEnabled(),
   autoSendVoiceTranscript: loadAutoSendVoiceTranscript(),
@@ -287,7 +314,125 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   setCurrentVoice: (voice) => set({ currentVoice: voice }),
 
-  setLlmProvider: (provider) => set({ llmProvider: provider }),
+  fetchCharacters: async () => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/characters`)
+      if (!response.ok) return
+      const data = (await response.json()) as CharactersResponse
+      if (!data.characters || data.characters.length === 0) return
+
+      set((state) => {
+        // Keep the current selection if it's still valid (e.g. a re-fetch
+        // after reconnect); otherwise fall back to the server's default, or
+        // the first character if even that isn't present.
+        const stillValid = state.currentCharacterId
+          && data.characters.some((c) => c.id === state.currentCharacterId)
+        const nextCharacterId = stillValid
+          ? state.currentCharacterId
+          : (data.default || data.characters[0].id)
+
+        // Only set the avatar from the character on first load (currentModel
+        // still empty) — don't clobber a model the user already picked
+        // manually via the RightSidebar dropdown/upload.
+        const nextCharacter = data.characters.find((c) => c.id === nextCharacterId)
+        const avatarPatch = !state.currentModel && nextCharacter?.avatar
+          ? { currentModel: nextCharacter.avatar }
+          : {}
+
+        return {
+          characters: data.characters,
+          currentCharacterId: nextCharacterId,
+          ...avatarPatch,
+        }
+      })
+
+      // Apply the user's saved custom avatar for the resolved character, if
+      // any, on top of the character's default set above.
+      const resolvedId = get().currentCharacterId
+      if (resolvedId) void get().loadCharacterAvatarOverride(resolvedId)
+    } catch (error) {
+      console.error('[chatStore] Failed to fetch characters', error)
+    }
+  },
+
+  setCharacter: (characterId) => {
+    const character = get().characters.find((c) => c.id === characterId)
+    if (!character || characterId === get().currentCharacterId) return
+
+    // New session on character switch, for two reasons:
+    // 1. UX — a single chat thread shouldn't visibly mix two characters.
+    // 2. Correctness — the backend Postgres conversation record is keyed by
+    //    session_id and *overwrites* its stored character_id on every
+    //    message (see conversation_store.py::ensure_conversation); reusing
+    //    a session_id across a switch would relabel that conversation's
+    //    character_id and mix both characters' messages under it.
+    // (Turn-history/LangChain memory is already isolated server-side by
+    // character_id regardless — see Stage 6 — this is the UI-level guard.)
+    set({
+      currentCharacterId: characterId,
+      currentVoice: '', // let the backend resolve this character's own voice
+      ...(character.avatar ? { currentModel: character.avatar } : {}),
+    })
+    get().createNewSession()
+    // Refine currentModel to the user's saved custom avatar for this
+    // character, if one exists — set() above already applied the
+    // character's default so the UI updates immediately either way.
+    void get().loadCharacterAvatarOverride(characterId)
+  },
+
+  loadCharacterAvatarOverride: async (characterId) => {
+    const token = get().authToken
+    if (!token) return
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/characters/${characterId}/avatar`, {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      if (response.status === 401) {
+        get().logout()
+        return
+      }
+      if (!response.ok) return
+      const data = (await response.json()) as { avatar: string | null }
+      // Guard against a stale response landing after the user switched
+      // characters again while this request was in flight.
+      if (data.avatar && get().currentCharacterId === characterId) {
+        set({ currentModel: data.avatar })
+      }
+    } catch (error) {
+      console.error('[chatStore] Failed to load avatar override', error)
+    }
+  },
+
+  setLlmProvider: (provider) => {
+    set({ llmProvider: provider })
+    try { localStorage.setItem(MODEL_KEY, provider) } catch {}
+  },
+
+  fetchModelsCatalog: async () => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/llm/models`)
+      if (!response.ok) return
+      const data = (await response.json()) as ModelsCatalog
+      set({ modelsCatalog: data })
+      
+      const flatModels = data.groups.flatMap((g) => g.models.map((m) => m.id))
+      const current = get().llmProvider
+      
+      const aliases: Record<string, string[]> = {
+        ollama: ['ollama-large', 'ollama-small'], qwen: ['ollama-small'],
+        llama_cpp: ['local-large', 'local-small'],
+        vllm: ['local-large', 'local-small'], deepseek: ['deepseek-chat'], gemini: ['gemini-flash'],
+      }
+      const exists = flatModels.includes(current) || (aliases[current]?.some((id) => flatModels.includes(id)) ?? false)
+      if (!exists && flatModels.length > 0) {
+        const fallback = flatModels.includes(data.default) ? data.default : flatModels[0]
+        console.warn(`[chatStore] Model '${current}' is not available. Falling back to default: '${fallback}'`)
+        get().setLlmProvider(fallback)
+      }
+    } catch (error) {
+      console.error('[chatStore] Failed to fetch models catalog', error)
+    }
+  },
 
   setTtsEnabled: (val) => {
     set({ ttsEnabled: val })
@@ -323,6 +468,26 @@ export const useChatStore = create<ChatState>((set, get) => ({
       authError: null,
     })
     saveSessions([])
+  },
+
+  devLogin: async () => {
+    set({ authLoading: true, authError: null })
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/auth/dev-login`, { method: 'POST' })
+      if (!response.ok) {
+        const error = await response.json().catch(() => null) as { detail?: string } | null
+        throw new Error(error?.detail || 'Development login failed')
+      }
+      const payload = await response.json() as { access_token: string; user: AuthUser }
+      get().setAuth(payload.access_token, payload.user)
+      await get().refreshServerConversations()
+      return true
+    } catch (error) {
+      set({ authError: error instanceof Error ? error.message : 'Development login failed' })
+      return false
+    } finally {
+      set({ authLoading: false })
+    }
   },
 
   login: async (email, password) => {

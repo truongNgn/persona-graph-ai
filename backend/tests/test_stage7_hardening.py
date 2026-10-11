@@ -32,7 +32,7 @@ def test_dev_token_roundtrip() -> None:
 
 def test_file_chat_history_persists_messages(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr("app.session_history.settings.session_history_path", str(tmp_path))
-    key = build_history_key("u1", "s1")
+    key = build_history_key("u1", "default", "s1")
 
     first = FileChatMessageHistory(key)
     first.add_messages([HumanMessage(content="hello"), AIMessage(content="hi")])

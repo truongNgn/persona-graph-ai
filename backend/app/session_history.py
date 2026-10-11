@@ -20,8 +20,15 @@ _file_locks: dict[Path, threading.Lock] = {}
 _global_lock = threading.Lock()
 
 
-def build_history_key(user_id: str, session_id: str) -> str:
-    return f"{user_id}:{session_id}"
+def build_history_key(user_id: str, character_id: str, session_id: str) -> str:
+    """Turn history is isolated per (user_id, character_id, session_id) —
+    not just (user_id, session_id) — so that reusing a session_id across a
+    character switch can't feed one character's conversation history into
+    another character's prompt. Chat memory (memory_store.py) already
+    isolates by (user_id, character_id); this closes the equivalent gap for
+    LangChain's own turn history, which is keyed independently.
+    """
+    return f"{user_id}:{character_id}:{session_id}"
 
 
 def _safe_filename(key: str) -> str:

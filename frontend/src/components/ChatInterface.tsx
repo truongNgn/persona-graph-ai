@@ -7,6 +7,7 @@ import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from 're
 import { API_BASE_URL } from '../config/backend'
 import { useSpeechInput } from '../hooks/useSpeechInput'
 import { useChatStore } from '../store/chatStore'
+import { CharacterPicker } from './CharacterPicker'
 import type { Emotion } from '../types'
 
 interface ChatInterfaceProps {
@@ -166,6 +167,11 @@ export function ChatInterface({
 
   return (
     <div style={s.container}>
+      {/* ── Header: current character + switcher ─────────── */}
+      <div style={s.header}>
+        <CharacterPicker />
+      </div>
+
       {/* ── Message list / Empty state ─────────────────── */}
       <div style={s.messageList}>
         {isEmpty ? (
@@ -290,6 +296,29 @@ export function ChatInterface({
           </div>
         </div>
 
+        {speechInput.supported && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6, color: '#94a3b8', fontSize: 11 }}>
+            <label htmlFor="microphone-device">Microphone</label>
+            <select
+              id="microphone-device"
+              value={speechInput.microphoneId}
+              onChange={(event) => speechInput.setMicrophoneId(event.target.value)}
+              disabled={voiceInputBusy}
+              style={{ maxWidth: 230, background: '#111827', color: '#cbd5e1', border: '1px solid #334155', borderRadius: 4 }}
+            >
+              <option value="">System default</option>
+              {speechInput.microphones.map((device, index) => (
+                <option key={device.deviceId} value={device.deviceId}>{device.label || `Microphone ${index + 1}`}</option>
+              ))}
+            </select>
+            {speechInput.state === 'recording' && (
+              <>
+                <meter aria-label="Microphone input level" min={0} max={1} value={speechInput.micLevel} style={{ width: 65 }} />
+                <span>{speechInput.micLevel > 0.02 ? 'Receiving audio' : 'Speak to test input'}</span>
+              </>
+            )}
+          </div>
+        )}
         {/* Emotion badge khi AI đang nói */}
         {isAISpeaking && (
           <div style={{ ...s.emotionBadge, background: EMOTION_COLORS[currentEmotion] }}>
@@ -325,6 +354,13 @@ const s: Record<string, React.CSSProperties> = {
     background: 'rgba(0,0,0,0.42)',
     backdropFilter: 'blur(6px)',
     overflow: 'hidden',
+  },
+  header: {
+    flex: '0 0 auto',
+    display: 'flex',
+    alignItems: 'center',
+    padding: '10px 16px',
+    borderBottom: '1px solid rgba(255,255,255,0.06)',
   },
   messageList: {
     flex: 1,

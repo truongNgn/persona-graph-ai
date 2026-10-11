@@ -15,7 +15,8 @@ from collections.abc import AsyncGenerator
 from app.agents import AgentContext, default_agent_registry
 from app.config import settings
 from app.feedback import FeedbackEvent, default_feedback_store
-from app.lc_chain import normalize_provider, resolve_router_models
+from app.lc_chain import normalize_provider
+from app.model_registry import model_registry
 from app.llm_handler import BaseLLMHandler
 from app.models import SentenceChunk
 from app.orchestrator.routing import HeuristicRouter, build_routing_context
@@ -71,10 +72,10 @@ class Orchestrator:
 
             selected_model: str | None = None
             if router_enabled:
-                large_model, small_model = resolve_router_models(self._provider)
+                large_info, small_info = model_registry.get_models_for_provider(self._provider)
                 router = HeuristicRouter(
-                    large_model=large_model,
-                    small_model=small_model,
+                    large_model=large_info.id,
+                    small_model=small_info.id,
                 )
                 decision = router.select_model(build_routing_context(user_text))
                 selected_model = decision.model

@@ -1,4 +1,5 @@
 FROM python:3.11-slim
+ENV PYTHONUNBUFFERED=1 KOKORO_MODEL_DIR=/app/models ONNX_PROVIDER=CPUExecutionProvider
 
 WORKDIR /app
 
@@ -17,7 +18,7 @@ COPY download_model.py .
 RUN python download_model.py
 
 # Copy code
-COPY . .
+COPY app.py .
 
 EXPOSE 8080
 

@@ -146,6 +146,40 @@ class DeepSeekHandler(BaseLLMHandler):
             return False
 
 
+class LocalLLMHandler(BaseLLMHandler):
+    """Local OpenAI-compatible server; health checks verify served IDs."""
+
+    def __init__(self) -> None:
+        self._client = AsyncOpenAI(
+            api_key="not-needed", base_url=settings.local_llm_base_url,
+            timeout=10.0, max_retries=0,
+        )
+        self.model = settings.local_llm_large_model
+
+    async def stream_tokens(self, user_text: str) -> AsyncGenerator[str, None]:
+        stream = await self._client.chat.completions.create(
+            model=self.model,
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": user_text},
+            ],
+            max_tokens=settings.local_llm_max_tokens,
+            stream=True,
+        )
+        async for chunk in stream:
+            if chunk.choices and chunk.choices[0].delta.content:
+                yield chunk.choices[0].delta.content
+
+    async def health_check(self) -> bool:
+        try:
+            models = await self._client.models.list()
+            available = {model.id for model in models.data}
+            return {settings.local_llm_large_model, settings.local_llm_small_model} <= available
+        except Exception as exc:
+            logger.warning("Local LLM health check failed: %s", exc)
+            return False
+
+
 class GeminiHandler(BaseLLMHandler):
     """Google Gemini via OpenAI-compatible API (Google AI Studio)."""
 
@@ -195,6 +229,9 @@ class GeminiHandler(BaseLLMHandler):
             return False
 
 
+# Legacy imports continue to work.
+VLLMHandler = LocalLLMHandler
+
 # Backwards compat alias
 LLMHandler = OllamaHandler
 
@@ -204,6 +241,8 @@ def get_llm_handler(provider: str | None = None) -> BaseLLMHandler:
     p = (provider or settings.llm_provider).lower()
     if p == "deepseek":
         return DeepSeekHandler()
+    elif p in {"llama_cpp", "vllm"}:
+        return LocalLLMHandler()
     elif p == "gemini":
         return GeminiHandler()
     elif p == "qwen":

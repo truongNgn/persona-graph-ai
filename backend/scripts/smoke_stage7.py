@@ -33,7 +33,7 @@ def main() -> None:
     assert parsed.request
     assert parsed.request.user_id == "smoke-user"
 
-    history = FileChatMessageHistory(build_history_key("smoke-user", "smoke-session"))
+    history = FileChatMessageHistory(build_history_key("smoke-user", "default", "smoke-session"))
     history.add_message(HumanMessage(content="stage7 smoke"))
     assert history.messages[-1].content == "stage7 smoke"
 

@@ -28,6 +28,14 @@ from app.models import Emotion, SentenceChunk
 logger = logging.getLogger(__name__)
 
 try:
+    from langsmith import traceable
+except ImportError:
+    # Safe fallback if langsmith is not installed
+    def traceable(*args, **kwargs):
+         return lambda func: func
+
+
+try:
     from elevenlabs import VoiceSettings
     from elevenlabs.client import AsyncElevenLabs
 except Exception as exc:  # pragma: no cover - depends on optional SDK packaging
@@ -137,6 +145,7 @@ class ElevenLabsTTSHandler(BaseTTSHandler):
         self._model_id = settings.elevenlabs_model_id
         self._output_format = settings.elevenlabs_output_format
 
+    @traceable(name="ElevenLabs TTS Synthesize", run_type="tool")
     async def synthesize(self, chunk: SentenceChunk) -> bytes:
         """
         Gọi ElevenLabs convert() để stream audio bytes về, gom lại thành
@@ -193,6 +202,7 @@ class GoogleCloudTTSHandler(BaseTTSHandler):
     def provider_name(self) -> str:
         return "google-cloud"
 
+    @traceable(name="Google Cloud TTS Synthesize", run_type="tool")
     async def synthesize(self, chunk: SentenceChunk) -> bytes:
         logger.debug(
             "Google Cloud TTS synthesize | text=%r",
@@ -228,9 +238,10 @@ class GCPCustomTTSHandler(BaseTTSHandler):
     Sends the text payload via HTTP POST and expects audio bytes in return.
     """
 
-    def __init__(self) -> None:
-        self._url = settings.gcp_custom_tts_url
-        self._api_key = settings.gcp_custom_tts_api_key
+    def __init__(self, url: str | None = None, api_key: str | None = None, timeout: float = 10.0) -> None:
+        self._url = settings.gcp_custom_tts_url if url is None else url
+        self._api_key = settings.gcp_custom_tts_api_key if api_key is None else api_key
+        self._timeout = timeout
         if not self._url:
             raise RuntimeError("GCP_CUSTOM_TTS_URL is not configured.")
 
@@ -238,8 +249,10 @@ class GCPCustomTTSHandler(BaseTTSHandler):
     def provider_name(self) -> str:
         return "gcp-custom"
 
+    @traceable(name="GCP Custom TTS Synthesize", run_type="tool")
     async def synthesize(self, chunk: SentenceChunk) -> bytes:
         logger.debug(
+
             "Custom GCP TTS synthesize | url=%s | text=%r",
             self._url,
             chunk.text[:60],
@@ -257,7 +270,7 @@ class GCPCustomTTSHandler(BaseTTSHandler):
 
         try:
             import httpx
-            async with httpx.AsyncClient(timeout=10.0) as client:
+            async with httpx.AsyncClient(timeout=self._timeout) as client:
                 response = await client.post(self._url, json=payload, headers=headers)
                 if response.status_code != 200:
                     logger.error(
@@ -282,6 +295,30 @@ class GCPCustomTTSHandler(BaseTTSHandler):
 
 
 # ---------------------------------------------------------------------------
+class KokoroTTSHandler(GCPCustomTTSHandler):
+    """Use the local CPU speech service with the existing audio contract."""
+
+    def __init__(self) -> None:
+        super().__init__(url=settings.kokoro_tts_url, api_key="",
+                         timeout=settings.kokoro_tts_timeout_seconds)
+
+    @property
+    def provider_name(self) -> str:
+        return "kokoro"
+
+    async def health_check(self) -> bool:
+        import httpx
+        try:
+            async with httpx.AsyncClient(timeout=3.0) as client:
+                response = await client.get(self._url.rsplit("/", 1)[0] + "/health")
+                return response.status_code == 200 and response.json().get("model_loaded") is True
+        except Exception:
+            return False
+
+    async def warmup(self) -> None:
+        await self.synthesize(SentenceChunk(text="Hello.", emotion=Emotion.neutral))
+
+
 # Coqui XTTS-v2: local voice cloning
 # ---------------------------------------------------------------------------
 
@@ -351,8 +388,10 @@ class CoquiXTTSHandler(BaseTTSHandler):
             self._tts = _load_xtts_model(self._model_name)
         return self._tts
 
+    @traceable(name="Coqui XTTS Synthesize", run_type="tool")
     async def synthesize(self, chunk: SentenceChunk) -> bytes:
         loop = asyncio.get_event_loop()
+
 
         def _run() -> bytes:
             try:
@@ -492,7 +531,9 @@ class FallbackTTSHandler(BaseTTSHandler):
 
 def get_tts_handler() -> BaseTTSHandler:
     provider = settings.tts_provider.lower().strip()
-    if provider == "google-cloud":
+    if provider == "kokoro":
+        return KokoroTTSHandler()
+    elif provider == "google-cloud":
         logger.info("TTS: Google Cloud Text-to-Speech (voice=%s)", settings.google_tts_voice_name)
         return GoogleCloudTTSHandler()
     elif provider == "gcp-custom":

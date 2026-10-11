@@ -83,7 +83,11 @@ _REFERENCE_RE = re.compile(
 )
 
 def _get_embeddings():
-    provider = settings.llm_provider.lower().strip()
+    # embedding_provider is intentionally its own setting, independent from
+    # llm_provider (docs/MODEL_MANAGEMENT_PLAN.md §2.12) — swapping the chat
+    # model must not silently swap the vector space of everything already
+    # embedded in Chroma.
+    provider = settings.embedding_provider.lower().strip()
     if provider == "gemini":
         from langchain_google_genai import GoogleGenerativeAIEmbeddings
         logger.info("Initializing GoogleGenerativeAIEmbeddings (text-embedding-004)")
@@ -98,6 +102,19 @@ def _get_embeddings():
     )
 
 embeddings = _get_embeddings()
+
+
+def embedding_signature() -> str:
+    """Stable id for the active embedding config, e.g. 'ollama:nomic-embed-text'.
+
+    Consumers that persist embeddings alongside metadata (lore_ingest.py,
+    lore_store.py) should stamp this value and warn on mismatch at load time
+    — a silently different embedding_provider/embedding_model makes prior
+    vectors unsearchable without any error.
+    """
+    provider = settings.embedding_provider.lower().strip()
+    model = "text-embedding-004" if provider == "gemini" else settings.embedding_model
+    return f"{provider}:{model}"
 
 vectorstore = Chroma(
     collection_name="chat_memories",

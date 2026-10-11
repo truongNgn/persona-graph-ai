@@ -1,0 +1,20 @@
+[
+  {
+    "id": "luna",
+    "display_name": "Luna",
+    "voice": "af_bella",
+    "avatar": "luna.glb",
+    "avatar_thumbnail": "luna_thumb.png",
+    "description": "A playful, energetic software developer who loves technology.",
+    "brain_path": "characters/luna.md"
+  },
+  {
+    "id": "kai",
+    "display_name": "Kai",
+    "voice": "am_michael",
+    "avatar": "kai.glb",
+    "avatar_thumbnail": "kai_thumb.png",
+    "description": "A quiet, thoughtful guy passionate about astronomy.",
+    "brain_path": "characters/kai.md"
+  }
+]

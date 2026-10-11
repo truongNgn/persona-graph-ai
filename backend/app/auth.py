@@ -100,7 +100,8 @@ def resolve_auth_context(authorization: str | None = None, token: str | None = N
 
     Chat and conversation data are per-user, so there is no anonymous or
     shared "dev user" fallback: every request/connection must present a
-    token issued by /api/auth/login or /api/auth/register.
+    token issued by /api/auth/login, /api/auth/register, or the explicitly
+    enabled local development login endpoint.
     """
     raw = token or _extract_bearer(authorization)
     if raw:

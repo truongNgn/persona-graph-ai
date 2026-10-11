@@ -31,6 +31,7 @@ claude/
 *.secret
 secrets.*
 voices/
+avatars/
 
 models/
 
@@ -71,7 +72,16 @@ developer_log.md
 claude.md
 gemini.md
 AGENTS.md
-docs/
+docs/**
+!docs/guides/
+docs/guides/*
+!docs/guides/WSL_LLAMA_CPP.md
+!docs/guides/WSL_VLLM_MIGRATION.md
+!docs/guides/README.md
+# Local browser automation state and test caches
+.ua/
+.pytest_cache/
+**/.pytest_cache/
 # GCP Custom TTS model files
 gcp-tts-service/*.onnx
 gcp-tts-service/voices.bin

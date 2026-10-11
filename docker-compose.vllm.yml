@@ -1,0 +1,45 @@
+# Optional comparison runtime. Stop llama-cpp before starting this service.
+services:
+  vllm:
+    image: vllm/vllm-openai:v0.11.0
+    gpus: all
+    shm_size: "1gb"
+    environment:
+      HF_HOME: /root/.cache/huggingface
+      VLLM_ATTENTION_BACKEND: FLASH_ATTN
+    volumes:
+      - huggingface_cache:/root/.cache/huggingface
+    ports:
+      - "127.0.0.1:8080:8000"
+    command:
+      - --model
+      - Qwen/Qwen2.5-1.5B-Instruct-AWQ
+      - --served-model-name
+      - persona-qwen
+      - --quantization
+      - awq_marlin
+      - --dtype
+      - half
+      - --max-model-len
+      - "4096"
+      - --max-num-seqs
+      - "1"
+      - --max-num-batched-tokens
+      - "256"
+      - --gpu-memory-utilization
+      - "0.35"
+      - --kv-cache-memory-bytes
+      - "134217728"
+      - --enforce-eager
+      - --swap-space
+      - "0"
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=5)"]
+      interval: 15s
+      timeout: 10s
+      start_period: 10m
+      retries: 5
+    restart: "no"
+
+volumes:
+  huggingface_cache:

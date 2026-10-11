@@ -1,15 +1,26 @@
 import { useState, useEffect } from 'react'
 import type { CSSProperties } from 'react'
 import { useChatStore } from '../store/chatStore'
+import { API_BASE_URL } from '../config/backend'
 
 export function LoginScreen() {
-  const { authLoading, authError, login, register, loginGoogle } = useChatStore()
+  const { authLoading, authError, login, register, loginGoogle, devLogin } = useChatStore()
+  const [devLoginEnabled, setDevLoginEnabled] = useState(false)
   const [mode, setMode] = useState<'login' | 'register'>('login')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [displayName, setDisplayName] = useState('')
 
   const googleClientId = import.meta.env.VITE_GOOGLE_CLIENT_ID || ''
+
+  useEffect(() => {
+    const controller = new AbortController()
+    void fetch(`${API_BASE_URL}/api/auth/dev-status`, { signal: controller.signal })
+      .then(async (response) => response.ok ? await response.json() as { enabled: boolean } : null)
+      .then((status) => { if (!controller.signal.aborted) setDevLoginEnabled(status?.enabled === true) })
+      .catch(() => {})
+    return () => controller.abort()
+  }, [])
 
   useEffect(() => {
     if (!googleClientId) return
@@ -58,6 +69,12 @@ export function LoginScreen() {
       <div style={s.card}>
         <h1 style={s.title}>Interactive AI Chatbot</h1>
         <p style={s.subtitle}>Sign in to start chatting with your AI agent</p>
+
+        {devLoginEnabled && (
+          <button type="button" disabled={authLoading} onClick={() => void devLogin()} style={s.devBtn}>
+            {authLoading ? 'Working...' : 'Quick login as Dev Tester'}
+          </button>
+        )}
 
         <div style={s.tabs}>
           <button
@@ -129,6 +146,17 @@ export function LoginScreen() {
 }
 
 const s: Record<string, CSSProperties> = {
+  devBtn: {
+    border: '1px solid rgba(52,211,153,0.45)',
+    borderRadius: 8,
+    padding: '10px 12px',
+    background: 'rgba(52,211,153,0.12)',
+    color: '#6ee7b7',
+    fontSize: 13,
+    fontWeight: 600,
+    cursor: 'pointer',
+    marginBottom: 4,
+  },
   wrap: {
     width: '100%',
     height: '100%',

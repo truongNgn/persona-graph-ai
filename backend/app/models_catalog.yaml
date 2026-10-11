@@ -1,0 +1,79 @@
+- id: gemini-flash
+  display_name: Google Gemini 2.5 Flash
+  runtime: google-genai
+  model: gemini-2.5-flash
+  deployment: cloud-api
+  context_window: 1000000
+  tier: large
+  cost_per_1m:
+    input: 0.30
+    output: 2.50
+  requires:
+    - gemini_api_key
+  fallback: deepseek-chat
+
+- id: deepseek-chat
+  display_name: DeepSeek Chat
+  runtime: openai-compatible
+  model: deepseek-chat
+  deployment: cloud-api
+  context_window: 64000
+  tier: large
+  cost_per_1m:
+    input: 0.14
+    output: 0.28
+  requires:
+    - deepseek_api_key
+  fallback: gemini-flash
+
+- id: local-large
+  display_name: Qwen 2.5 1.5B Q4_K_M (llama.cpp)
+  runtime: openai-compatible
+  model: persona-qwen
+  deployment: self-hosted
+  context_window: 4096
+  tier: large
+  cost_per_1m:
+    input: 0.00
+    output: 0.00
+  requires: []
+  fallback: null
+
+- id: local-small
+  display_name: Qwen 2.5 1.5B Q4_K_M (routing alias)
+  runtime: openai-compatible
+  model: persona-qwen
+  deployment: self-hosted
+  context_window: 4096
+  tier: small
+  cost_per_1m:
+    input: 0.00
+    output: 0.00
+  requires: []
+  fallback: null
+
+- id: ollama-large
+  display_name: Ollama Large (Llama 3.1)
+  runtime: ollama
+  model: llama3.1:latest
+  deployment: local
+  context_window: 8192
+  tier: large
+  cost_per_1m:
+    input: 0.00
+    output: 0.00
+  requires: []
+  fallback: ollama-small
+
+- id: ollama-small
+  display_name: Ollama Small (Qwen 2.5)
+  runtime: ollama
+  model: qwen2.5:1.5b
+  deployment: local
+  context_window: 32768
+  tier: small
+  cost_per_1m:
+    input: 0.00
+    output: 0.00
+  requires: []
+  fallback: null
