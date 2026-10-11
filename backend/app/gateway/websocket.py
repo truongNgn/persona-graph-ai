@@ -10,6 +10,7 @@ from fastapi import WebSocket, WebSocketDisconnect
 
 from app.auth import websocket_auth_context
 from app.config import settings
+from app.model_availability import is_model_available
 from app.gateway.schemas import ChatRequest, parse_client_message
 from app.models import ErrorPayload
 from app.orchestrator import Orchestrator, TurnOrchestrator
@@ -135,7 +136,6 @@ async def websocket_chat(websocket: WebSocket) -> None:
                 model_or_provider = message.provider or settings.llm_provider
                 
                 from app.model_registry import model_registry
-                import httpx
                 
                 try:
                     large_info, small_info = model_registry.get_models_for_provider(model_or_provider)
@@ -163,24 +163,10 @@ async def websocket_chat(websocket: WebSocket) -> None:
                         break
 
                     # Check 3: reachability ping
-                    reachable = True
-                    if info.runtime == "ollama":
-                        try:
-                            async with httpx.AsyncClient(timeout=1.5) as client_http:
-                                res = await client_http.get(settings.ollama_host)
-                                reachable = (res.status_code == 200)
-                        except Exception:
-                            reachable = False
-                    elif info.runtime == "openai-compatible" and info.id != "deepseek-chat":
-                        try:
-                            async with httpx.AsyncClient(timeout=1.5) as client_http:
-                                res = await client_http.get(f"{settings.vllm_base_url}/models")
-                                reachable = (res.status_code == 200)
-                        except Exception:
-                            reachable = False
+                    reachable = await is_model_available(info)
 
                     if not reachable:
-                        error_msg = f"Runtime endpoint for model '{info.id}' is not reachable."
+                        error_msg = f"Model '{info.model}' is not served by its runtime endpoint."
                         break
 
                 if error_msg:

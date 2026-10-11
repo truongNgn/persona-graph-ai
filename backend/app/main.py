@@ -22,6 +22,7 @@ from app.conversation_store import (
     delete_conversation,
     get_conversation_detail,
     get_or_create_google_user,
+    get_or_create_dev_user,
     get_user,
     list_conversations,
     user_public_dict,
@@ -34,8 +35,10 @@ from app.rate_limit import RateLimitMiddleware
 from app.session_history import session_history_ready
 from app.stt_handler import BaseSTTHandler, get_stt_handler, validate_audio_upload
 from app.tts_handler import BaseTTSHandler, get_tts_handler
+import httpx
 from app.warmup import start_background_warmup, warmup_state
 from app.model_registry import model_registry
+from app.model_availability import is_model_available
 from app.lc_chain import resolve_model_info
 
 logging.basicConfig(
@@ -210,9 +213,30 @@ async def readiness():
             "configured": bool(settings.database_url),
             "ready": database_ok,
         },
-        "tts": {"provider": tts.provider_name, "ready": tts.is_active},
+        "tts": {"provider": tts.provider_name, "ready": await tts.health_check() if hasattr(tts, "health_check") else tts.is_active},
         "warmup": warmup_state.to_dict(),
     }
+
+
+def dev_quick_login_available() -> bool:
+    return settings.deployment_mode == "local" and settings.dev_quick_login_enabled
+
+
+@app.get("/api/auth/dev-status")
+async def dev_login_status() -> dict[str, bool]:
+    return {"enabled": dev_quick_login_available()}
+
+
+@app.post("/api/auth/dev-login")
+async def dev_login():
+    if not dev_quick_login_available():
+        raise HTTPException(status_code=404, detail="Development login is disabled.")
+    try:
+        user = await get_or_create_dev_user()
+    except Exception as exc:
+        logger.error("Development login account unavailable: %s", exc)
+        raise HTTPException(status_code=503, detail="Development account is unavailable. Please retry.") from exc
+    return {"access_token": issue_dev_token(user.id), "token_type": "bearer", "user": user_public_dict(user)}
 
 
 @app.post("/api/auth/register")
@@ -314,6 +338,15 @@ async def remove_conversation(
 @app.get("/api/voices")
 async def get_voices(auth: AuthContext = Depends(get_request_auth_context)):
     voices = []
+    if settings.tts_provider == "kokoro":
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                response = await client.get(settings.kokoro_tts_url.rsplit("/", 1)[0] + "/voices")
+                response.raise_for_status()
+                return {"voices": response.json()["voices"], "provider": "kokoro", "supports_voice_cloning": False}
+        except Exception as exc:
+            logger.warning("Kokoro voice discovery failed: %s", exc)
+            return {"voices": ["af_bella", "am_michael"], "provider": "kokoro", "supports_voice_cloning": False}
 
     if settings.gcs_bucket_name:
         try:
@@ -499,28 +532,6 @@ async def get_llm_models():
     if settings.deployment_mode == "local":
         await model_registry.discover_local_models()
 
-    # 2. Ping check endpoints concurrently
-    import httpx
-    async def is_reachable(runtime: str, model_id: str) -> bool:
-        if runtime == "ollama":
-            try:
-                async with httpx.AsyncClient(timeout=1.0) as client:
-                    res = await client.get(settings.ollama_host)
-                    return res.status_code == 200
-            except Exception:
-                return False
-        elif runtime == "openai-compatible":
-            if model_id == "deepseek-chat":
-                return True
-            else:
-                try:
-                    async with httpx.AsyncClient(timeout=1.0) as client:
-                        res = await client.get(f"{settings.vllm_base_url}/models")
-                        return res.status_code == 200
-                except Exception:
-                    return False
-        return True
-
     # Get candidate models
     candidates = model_registry.list_all()
 
@@ -542,7 +553,7 @@ async def get_llm_models():
             continue
 
         filtered_candidates.append(info)
-        tasks.append(is_reachable(info.runtime, info.id))
+        tasks.append(is_model_available(info))
 
     reachability_results = await asyncio.gather(*tasks)
 
@@ -568,7 +579,12 @@ async def get_llm_models():
             continue
         final_models.append(info)
 
+    seen_self_hosted: set[str] = set()
     for info in final_models:
+        if info.deployment == "self-hosted":
+            if info.model in seen_self_hosted:
+                continue
+            seen_self_hosted.add(info.model)
         dep = info.deployment
         if dep in groups_dict:
             groups_dict[dep]["models"].append({
@@ -584,7 +600,7 @@ async def get_llm_models():
     try:
         default_model = resolve_model_info(None, None).id
     except Exception:
-        default_model = "ollama-large"
+        default_model = "local-large"
 
     # If the default model ID is one of the skipped static models, map it to the discovered model ID
     if default_model in ("ollama-large", "ollama-small"):
@@ -611,6 +627,7 @@ async def get_stt_status():
         "language": settings.stt_language or None,
         "max_file_mb": settings.stt_max_file_mb,
         "max_duration_seconds": settings.stt_max_duration_seconds,
+        "message": getattr(stt, "reason", None),
     }
 
 
@@ -621,10 +638,10 @@ async def transcribe_audio(
 ):
     stt: BaseSTTHandler = app.state.stt_handler
     if not stt.is_active:
-        raise HTTPException(status_code=503, detail="STT is not enabled.")
+        raise HTTPException(status_code=503, detail=getattr(stt, "reason", "STT is not enabled."))
 
     resolved_mime_type = mime_type or audio.content_type or ""
-    audio_bytes = await audio.read()
+    audio_bytes = await audio.read(settings.stt_max_file_mb * 1024 * 1024 + 1)
     try:
         validate_audio_upload(audio_bytes, resolved_mime_type)
         result = await stt.transcribe(audio_bytes, resolved_mime_type)

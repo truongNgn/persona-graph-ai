@@ -27,8 +27,8 @@ _SETTING_OVERRIDES = {
     "deepseek-chat": "deepseek_model",
     "ollama-large": "ollama_large_model",
     "ollama-small": "ollama_small_model",
-    "vllm-large": "vllm_large_model",
-    "vllm-small": "vllm_small_model",
+    "local-large": "local_llm_large_model",
+    "local-small": "local_llm_small_model",
 }
 
 
@@ -56,7 +56,9 @@ class ModelRegistry:
     def get(self, model_id: str | None) -> ModelInfo | None:
         if not model_id:
             return None
-        return self._models.get(model_id.lower().strip())
+        key = model_id.lower().strip()
+        key = {"vllm-large": "local-large", "vllm-small": "local-small"}.get(key, key)
+        return self._models.get(key)
 
     def list_all(self) -> list[ModelInfo]:
         return list(self._models.values())
@@ -75,8 +77,8 @@ class ModelRegistry:
         provider_clean = provider_or_model_id.lower().strip()
 
         # Nếu chính là một model ID trong catalog
-        if provider_clean in self._models:
-            model = self._models[provider_clean]
+        model = self.get(provider_clean)
+        if model:
             return model, model
 
         # Nếu là tên provider truyền thống
@@ -84,8 +86,8 @@ class ModelRegistry:
             return self._get_required("ollama-large"), self._get_required("ollama-small")
         elif provider_clean == "qwen":
             return self._get_required("ollama-small"), self._get_required("ollama-small")
-        elif provider_clean == "vllm":
-            return self._get_required("vllm-large"), self._get_required("vllm-small")
+        elif provider_clean in {"llama_cpp", "vllm"}:
+            return self._get_required("local-large"), self._get_required("local-small")
         elif provider_clean == "deepseek":
             return self._get_required("deepseek-chat"), self._get_required("deepseek-chat")
         elif provider_clean == "gemini":
@@ -127,6 +129,10 @@ class ModelRegistry:
 
             model_name = m.get("model", m.get("name", ""))
             if not model_name:
+                continue
+            # Older Ollama tag responses omit capabilities. Never offer the
+            # configured embedding-only model as a chat option.
+            if model_name.split(":")[0] == settings.embedding_model.split(":")[0]:
                 continue
 
             param_size = ""
@@ -187,22 +193,22 @@ class ModelRegistry:
                 "fallback": "gemini-flash"
             },
             {
-                "id": "vllm-large",
-                "display_name": "vLLM Large",
+                "id": "local-large",
+                "display_name": "Local LLM Large",
                 "runtime": "openai-compatible",
-                "model": settings.vllm_large_model or "Meta-Llama-3.1-8B-Instruct-Q4_K_M",
+                "model": settings.local_llm_large_model or "persona-qwen",
                 "deployment": "self-hosted",
-                "context_window": 131072,
+                "context_window": 4096,
                 "tier": "large",
-                "fallback": "vllm-small"
+                "fallback": None
             },
             {
-                "id": "vllm-small",
-                "display_name": "vLLM Small",
+                "id": "local-small",
+                "display_name": "Local LLM Small",
                 "runtime": "openai-compatible",
-                "model": settings.vllm_small_model or "Meta-Llama-3.1-8B-Instruct-Q4_K_M",
+                "model": settings.local_llm_small_model or "persona-qwen",
                 "deployment": "self-hosted",
-                "context_window": 131072,
+                "context_window": 4096,
                 "tier": "small"
             },
             {

@@ -35,9 +35,9 @@ def parse_client_message(data: dict, authenticated_user_id: str | None = None) -
         return MessageParseResult(type="interrupt")
 
     if msg_type == "set_model":
-        provider = str(data.get("provider", "ollama")).lower().strip()
+        provider = str(data.get("provider", settings.llm_provider)).lower().strip()
         from app.model_registry import model_registry
-        valid_legacy = {"ollama", "qwen", "vllm", "deepseek", "gemini"}
+        valid_legacy = set(SUPPORTED_LLM_PROVIDERS)
         if provider not in valid_legacy and not model_registry.get(provider):
             return MessageParseResult(type="set_model", error=f"Unknown provider or model ID: {provider}")
         return MessageParseResult(type="set_model", provider=provider)

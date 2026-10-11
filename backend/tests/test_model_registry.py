@@ -108,7 +108,7 @@ class MockOllamaClient:
                 {
                     "model": "nomic-embed-text:latest",
                     "details": {"parameter_size": "137M"},
-                    "capabilities": ["embedding"]
+                    # Real /api/tags responses may omit capabilities.
                 },
                 {
                     "model": "tinyllama:latest",

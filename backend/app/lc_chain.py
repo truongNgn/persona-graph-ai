@@ -53,7 +53,7 @@ def resolve_model_info(model: str | None, provider: str | None) -> ModelInfo:
         if prov_clean == "gemini" or "gemini" in model_clean.lower():
             runtime = "google-genai"
             deployment = "cloud-api"
-        elif prov_clean == "deepseek" or prov_clean == "vllm" or "deepseek" in model_clean.lower():
+        elif prov_clean == "deepseek" or prov_clean in {"llama_cpp", "vllm"} or "deepseek" in model_clean.lower():
             runtime = "openai-compatible"
             deployment = "cloud-api" if prov_clean == "deepseek" else "self-hosted"
 
@@ -68,15 +68,16 @@ def resolve_model_info(model: str | None, provider: str | None) -> ModelInfo:
         )
 
     # Resolve default model for provider/runtime
-    if prov_clean in registry._models:
-        return registry._models[prov_clean]
+    registered = registry.get(prov_clean)
+    if registered:
+        return registered
 
     if prov_clean == "gemini":
         return registry._get_required("gemini-flash")
     elif prov_clean == "deepseek":
         return registry._get_required("deepseek-chat")
-    elif prov_clean == "vllm":
-        return registry._get_required("vllm-large")
+    elif prov_clean in {"llama_cpp", "vllm"}:
+        return registry._get_required("local-large")
     elif prov_clean == "qwen":
         return registry._get_required("ollama-small")
     elif prov_clean == "ollama":
@@ -101,12 +102,13 @@ def _build_llm(info: ModelInfo) -> BaseChatModel:
                 streaming=True,
             )
         else:
-            # vLLM or generic self-hosted OpenAI-compatible
+            # Local OpenAI-compatible inference
             return ChatOpenAI(
                 model=info.model,
-                base_url=settings.vllm_base_url,
+                base_url=settings.local_llm_base_url,
                 api_key="not-needed",
                 streaming=True,
+                max_tokens=settings.local_llm_max_tokens,
             )
     elif info.runtime == "google-genai":
         from langchain_google_genai import ChatGoogleGenerativeAI

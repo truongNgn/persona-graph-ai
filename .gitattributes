@@ -1,0 +1,2 @@
+# WSL executes these files directly; preserve Unix line endings on Windows.
+*.sh text eol=lf

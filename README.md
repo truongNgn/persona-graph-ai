@@ -8,6 +8,83 @@ This is not only a chatbot UI. It is a small AI engineering platform built aroun
 Gateway -> Orchestrator -> AgentRegistry -> Agent -> ToolRegistry -> Guardrails -> Feedback
 ```
 
+See the [local runtime guides](docs/guides/README.md) for setup, GPU tuning, microphone input, validation and rollback.
+
+## Local inference on E: (WSL Docker + llama.cpp)
+
+The default chat provider is llama.cpp CUDA, serving `Qwen/Qwen2.5-1.5B-Instruct-GGUF` (Q4_K_M)
+as `persona-qwen`. Both routing tiers use this one model to avoid loading two
+models on a 4 GB GPU. Ollama is used only for CPU Nomic embeddings, preserving
+the existing Chroma embedding space.
+
+To keep model data off C:, place Ubuntu on E: (this machine: `E:\WSL\Ubuntu`). Install the independent
+Docker Engine and NVIDIA Container Toolkit once:
+
+```powershell
+wsl -d Ubuntu -u root -- bash /mnt/d/Coder-IT/AI/persona-graph-ai/scripts/setup-wsl-docker.sh
+```
+
+For a new checkout, copy `backend/.env.example` to `backend/.env` and configure
+a private `AUTH_TOKEN_SECRET`. Keep an existing `.env` when upgrading. Adjust
+the example WSL paths below to match your checkout.
+
+Manage this project's WSL daemon from PowerShell:
+
+```powershell
+wsl -d Ubuntu -u root -- bash /mnt/d/Coder-IT/AI/persona-graph-ai/scripts/download-llama-model.sh
+./scripts/wsl-compose.ps1 up -d llama-cpp ollama postgres
+./scripts/wsl-compose.ps1 exec ollama ollama pull nomic-embed-text
+./scripts/wsl-compose.ps1 logs --tail 80 llama-cpp
+```
+
+The wrapper explicitly uses `unix:///run/persona-docker.sock`. Plain Windows
+`docker` commands may still target Docker Desktop and unrelated projects.
+Images and named volumes reside in Ubuntu at `/var/lib/persona-docker`, inside
+the E:-backed virtual disk. Model weights persist in the `llama_models`
+volume, not in the repository or Windows C: cache.
+
+For the existing Windows development backend, use `backend/.venv` as before.
+The configured endpoints are llama.cpp `http://localhost:8080/v1`, CPU embeddings
+`http://localhost:11435`, and Postgres `localhost:5433`. The frontend uses backend
+port 8001. Optional complete container deployment:
+
+```powershell
+./scripts/wsl-compose.ps1 --profile app up -d --build
+```
+
+Local speech uses **Kokoro v1.0 INT8 ONNX on CPU**, with no GPU allocation or
+cloud billing dependency. The app profile starts the `kokoro` service on
+`http://localhost:8880`; the backend connects internally to
+`http://kokoro:8080/synthesize`. Native Windows backend configuration uses
+`TTS_PROVIDER=kokoro` and `KOKORO_TTS_URL=http://localhost:8880/synthesize`.
+
+The English voice picker lists Kokoro presets (Luna: `af_bella`, Kai:
+`am_michael`). Kokoro does not clone uploaded voice samples, control emotions,
+or natively support Vietnamese. The model and matching voice pack are downloaded
+once during image build; inference stays local. The CPU service is limited to
+four cores and 2 GiB RAM. `/ready` checks its actual model health, and chat still
+falls back to text if speech fails.
+
+```powershell
+./scripts/wsl-compose.ps1 --profile app up -d --build kokoro
+./scripts/wsl-compose.ps1 logs --tail 40 kokoro
+Invoke-RestMethod http://localhost:8880/health
+```
+
+The container backend is exposed at port 8001 and frontend at port 8088.
+For a one-click test login, set `DEV_QUICK_LOGIN_ENABLED=true` in `backend/.env`
+and restart/recreate the backend. The login screen then shows **Quick login as
+Dev Tester**, which creates/reuses a dedicated test account. The option defaults
+to false and is always disabled when `DEPLOYMENT_MODE=cloud`, even if the flag is
+true. No password is embedded in the frontend.
+
+Stop a development backend on 8001 before starting the container backend.
+See [WSL migration guide](docs/guides/WSL_VLLM_MIGRATION.md) for backups,
+verification, GPU limits, and cleanup. Historical Ollama chat setup below is
+retained for reference; it is no longer the default deployment.
+
+
+
 ## Production AI Engineering Highlights
 
 | Engineering Problem | Implementation |
@@ -135,9 +212,9 @@ Latest known backend result:
 | Orchestration | LangChain, LangGraph, LangSmith optional tracing |
 | Agents/Tools | AgentRegistry, ToolRegistry, RoleplayChatAgent |
 | Memory/RAG | ChromaDB dense retrieval, BM25 sparse retrieval, RRF |
-| LLM | Ollama / vLLM OpenAI-compatible / DeepSeek |
-| TTS | ElevenLabs / Coqui XTTS-v2 / text-only fallback |
-| STT | faster-whisper, disabled-safe fallback |
+| LLM | llama.cpp / Ollama / vLLM OpenAI-compatible / DeepSeek |
+| TTS | Local Kokoro INT8 CPU / optional cloud or XTTS / text-only fallback |
+| STT | faster-whisper, cached CPU/int8 inference, disabled-safe fallback |
 | Lip-sync | Rhubarb Lip-Sync |
 | Frontend | React, TypeScript, Vite, React Three Fiber, Three.js, Zustand |
 | Production bridge | Postgres Compose service, file-backed session history, auth/rate-limit middleware |

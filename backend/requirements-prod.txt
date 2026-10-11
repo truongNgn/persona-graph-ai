@@ -8,7 +8,10 @@ python-dotenv==1.0.1
 elevenlabs==1.50.3
 openai>=1.54.0
 python-multipart>=0.0.12
-SQLAlchemy>=2.0.32
+faster-whisper>=1.0.3
+# faster-whisper 1.2.1 passes metadata_errors, removed in PyAV 19.
+av>=11,<19
+SQLAlchemy[asyncio]>=2.0.32
 asyncpg>=0.29.0
 
 # Hybrid Memory — BM25 sparse retrieval
@@ -26,3 +29,6 @@ langgraph>=0.2.0
 langsmith>=0.1.0
 langchain-google-genai==2.0.11
 google-cloud-texttospeech>=2.17.0
+google-cloud-storage>=2.0.0
+google-auth>=2.0.0
+PyYAML>=6.0

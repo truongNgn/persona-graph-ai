@@ -83,6 +83,7 @@ export function RightSidebar() {
   const { currentModel, currentVoice, authToken, characters, currentCharacterId, setCurrentModel, setCurrentVoice } = useChatStore()
   const [models, setModels] = useState<string[]>([])
   const [voices, setVoices] = useState<string[]>([])
+  const [supportsVoiceCloning, setSupportsVoiceCloning] = useState(true)
   const [customModelName, setCustomModelName] = useState<string | null>(null)
   const [customModelFile, setCustomModelFile] = useState<File | null>(null)
   const [uploadingVoice, setUploadingVoice] = useState(false)
@@ -112,8 +113,12 @@ export function RightSidebar() {
         return res.json()
       })
       .then((data) => {
+          setSupportsVoiceCloning(data.supports_voice_cloning !== false)
         if (data.voices && data.voices.length > 0) {
           setVoices(data.voices)
+            if (data.provider === 'kokoro' && !data.voices.includes(useChatStore.getState().currentVoice)) {
+              setCurrentVoice('')
+            }
         }
       })
       .catch((err) => console.error('Failed to fetch voices', err))
@@ -260,7 +265,7 @@ export function RightSidebar() {
           onChange={setCurrentVoice}
         />
 
-        <div style={s.uploadRow}>
+          {supportsVoiceCloning && <div style={s.uploadRow}>
           <label style={s.uploadBtn}>
             🎙️ Upload voice sample (.wav)
             <input
@@ -271,7 +276,7 @@ export function RightSidebar() {
             />
           </label>
           {uploadingVoice && <span style={s.fileName}>Uploading...</span>}
-        </div>
+          </div>}
 
         <div style={s.divider} />
       </div>

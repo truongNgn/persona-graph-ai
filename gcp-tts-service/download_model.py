@@ -1,16 +1,23 @@
+"""Download pinned v1.0 CPU model and matching voice pack at build time."""
 import os
 import urllib.request
+from pathlib import Path
 
-def download_file(url, filename):
-    print(f"Downloading {url} to {filename}...")
-    if os.path.exists(filename):
-        print(f"{filename} already exists. Skipping.")
+BASE_URL = "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0"
+
+
+def download_file(filename: str, directory: Path) -> None:
+    destination = directory / filename
+    if destination.is_file() and destination.stat().st_size:
         return
-    urllib.request.urlretrieve(url, filename)
-    print(f"Downloaded {filename} successfully.")
+    temporary = destination.with_suffix(destination.suffix + ".part")
+    urllib.request.urlretrieve(f"{BASE_URL}/{filename}", temporary)
+    temporary.replace(destination)
+    print(f"Downloaded {filename}: {destination.stat().st_size} bytes", flush=True)
+
 
 if __name__ == "__main__":
-    # Download Kokoro ONNX model weights and voices mapping
-    download_file("https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files/kokoro-v0_19.onnx", "kokoro-v0_19.onnx")
-    download_file("https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files/voices.bin", "voices.bin")
-    print("All model files downloaded successfully!")
+    directory = Path(os.environ.get("KOKORO_MODEL_DIR", "/app/models"))
+    directory.mkdir(parents=True, exist_ok=True)
+    for filename in ("kokoro-v1.0.int8.onnx", "voices-v1.0.bin"):
+        download_file(filename, directory)
