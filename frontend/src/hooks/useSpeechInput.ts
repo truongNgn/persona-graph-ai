@@ -5,9 +5,6 @@ type SpeechState = 'idle' | 'listening' | 'recording' | 'processing' | 'uploadin
 
 interface UseSpeechInputOptions {
   onTranscript: (text: string) => void
-  pauseVAD: () => void
-  resumeVAD: () => void
-  getStream: () => MediaStream | null
   maxRecordingSeconds: number
 }
 
@@ -28,8 +25,6 @@ interface SpeechInputResult {
 
 export function useSpeechInput({
   onTranscript,
-  pauseVAD,
-  resumeVAD,
   maxRecordingSeconds,
 }: UseSpeechInputOptions): SpeechInputResult {
   const [state, setState] = useState<SpeechState>('idle')
@@ -95,10 +90,8 @@ export function useSpeechInput({
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : 'Voice input failed')
       setState('error')
-    } finally {
-      resumeVAD()
     }
-  }, [onTranscript, resumeVAD])
+  }, [onTranscript])
 
   const stopRecording = useCallback(() => {
     cleanupTimer()
@@ -120,8 +113,7 @@ export function useSpeechInput({
       if (!status.enabled) {
         throw new Error(status.message || 'Voice input is disabled on the backend. You can still type a message.')
       }
-      pauseVAD()
-      // Acquire a fresh recording stream; the background VAD stream may be stale.
+      // Acquire the selected microphone only when recording is requested.
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
           ...(microphoneId ? { deviceId: { exact: microphoneId } } : {}),
@@ -187,12 +179,11 @@ export function useSpeechInput({
       cleanupTimer()
       releaseCapture()
       setMicLevel(0)
-      resumeVAD()
       setPermissionDenied(error instanceof DOMException && error.name === 'NotAllowedError')
       setErrorMessage(error instanceof Error ? error.message : 'Microphone access failed')
       setState('error')
     }
-  }, [cleanupTimer, maxRecordingSeconds, microphoneId, pauseVAD, refreshMicrophones, releaseCapture, resumeVAD, stopRecording, supported, uploadAudio])
+  }, [cleanupTimer, maxRecordingSeconds, microphoneId, refreshMicrophones, releaseCapture, stopRecording, supported, uploadAudio])
 
   useEffect(() => {
     void refreshMicrophones()

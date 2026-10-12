@@ -28,6 +28,7 @@ export function useAudioQueue() {
   const audioCtxRef = useRef<AudioContext | null>(null)
   const isPlayingRef = useRef(false)
   const sourceRef = useRef<AudioBufferSourceNode | null>(null)
+  const playbackGeneration = useRef(0)
 
   // WeakMap: chunk object → Promise<AudioBuffer>
   // Pre-decode kết quả được cache tại đây, tự dọn khi chunk bị GC
@@ -103,11 +104,13 @@ export function useAudioQueue() {
     }
 
     isPlayingRef.current = true
+    const generation = playbackGeneration.current
     setIsAISpeaking(true)
     setCurrentEmotion(chunk.emotion)
 
     try {
       const ctx = await getAudioContext()
+      if (generation !== playbackGeneration.current) return
       if (!ctx) {
         console.warn('[AudioQueue] No AudioContext, skipping audio playback.')
         isPlayingRef.current = false
@@ -126,6 +129,7 @@ export function useAudioQueue() {
         audioBuffer = await ctx.decodeAudioData(base64ToArrayBuffer(chunk.audio_base64))
       }
 
+      if (generation !== playbackGeneration.current) return
       const source = ctx.createBufferSource()
       source.buffer = audioBuffer
       source.connect(ctx.destination)
@@ -147,6 +151,7 @@ export function useAudioQueue() {
         startAmplitudeLipSync(source)
       }
     } catch (err) {
+      if (generation !== playbackGeneration.current) return
       console.error('[AudioQueue] Playback error:', err)
       isPlayingRef.current = false
       playNext()
@@ -161,6 +166,7 @@ export function useAudioQueue() {
   }, [audioQueue.length, playNext])
 
   const stopPlayback = useCallback(() => {
+    playbackGeneration.current++
     if (sourceRef.current) {
       sourceRef.current.onended = null
       try { sourceRef.current.stop() } catch { /* already stopped */ }
@@ -181,5 +187,6 @@ export function useAudioQueue() {
   return {
     audioContextRef: audioCtxRef,
     stopPlayback,
+    preparePlayback: getAudioContext,
   }
 }

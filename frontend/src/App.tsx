@@ -5,7 +5,6 @@ import { RightSidebar } from './components/RightSidebar'
 import { LoginScreen } from './components/LoginScreen'
 import { useWebSocket } from './hooks/useWebSocket'
 import { useAudioQueue } from './hooks/useAudioQueue'
-import { useVAD } from './hooks/useVAD'
 import { useChatStore } from './store/chatStore'
 import { AdminDashboard } from './components/AdminDashboard'
 
@@ -17,7 +16,7 @@ export function App() {
 }
 
 function AuthenticatedApp() {
-  const { stopPlayback } = useAudioQueue()
+  const { stopPlayback, preparePlayback } = useAudioQueue()
   const { sendMessage, sendInterrupt, sendSetModel } = useWebSocket(stopPlayback)
   const authToken = useChatStore((state) => state.authToken)
   const refreshServerConversations = useChatStore((state) => state.refreshServerConversations)
@@ -26,21 +25,6 @@ function AuthenticatedApp() {
     stopPlayback()
     sendInterrupt()
   }, [stopPlayback, sendInterrupt])
-
-  const isAISpeaking = useCallback(
-    () => useChatStore.getState().isAISpeaking,
-    [],
-  )
-
-  const { startListening, stopListening, pauseVAD, resumeVAD, getStream } = useVAD({
-    onVoiceDetected: handleInterrupt,
-    isAISpeaking,
-  })
-
-  useEffect(() => {
-    startListening()
-    return () => stopListening()
-  }, [startListening, stopListening])
 
   useEffect(() => {
     if (authToken) void refreshServerConversations()
@@ -64,9 +48,7 @@ function AuthenticatedApp() {
         <ChatInterface
           sendMessage={sendMessage}
           sendInterrupt={handleInterrupt}
-          pauseVAD={pauseVAD}
-          resumeVAD={resumeVAD}
-          getVADStream={getStream}
+          preparePlayback={preparePlayback}
         />
       </div>
       <RightSidebar />

@@ -165,6 +165,7 @@ interface ChatState {
   // Audio pipeline
   audioQueue: AudioChunkPayload[]
   isAISpeaking: boolean
+  isAgentResponding: boolean
 
   // Avatar & Voice state
   currentEmotion: Emotion
@@ -258,6 +259,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   activeSessionId: initialSessionId,
   audioQueue: [],
   isAISpeaking: false,
+  isAgentResponding: false,
   currentEmotion: 'neutral',
   currentModel: '',
   currentVoice: '',

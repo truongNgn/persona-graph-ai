@@ -33,6 +33,7 @@ export function useWebSocket(onClearQueue?: () => void) {
 
     ws.onclose = (event: CloseEvent) => {
       if (!isMounted.current) return
+      useChatStore.setState({ isAgentResponding: false })
       setWsStatus('closed')
       
       // If code is 1008 (Policy Violation / Auth failed), log out and do not auto-reconnect.
@@ -77,10 +78,11 @@ export function useWebSocket(onClearQueue?: () => void) {
           break
 
         case 'done':
-          // Nothing to do here — audio queue drains itself
+          useChatStore.setState({ isAgentResponding: false })
           break
 
         case 'clear_queue':
+          useChatStore.setState({ isAgentResponding: false })
           clearQueue()
           onClearQueueRef.current?.()
           break
@@ -100,6 +102,7 @@ export function useWebSocket(onClearQueue?: () => void) {
           break
 
         case 'error':
+          useChatStore.setState({ isAgentResponding: false })
           console.error('[WS] Server error:', msg.message)
           addMessage({
             id: crypto.randomUUID(),
@@ -117,6 +120,7 @@ export function useWebSocket(onClearQueue?: () => void) {
 
     return () => {
       isMounted.current = false
+      useChatStore.setState({ isAgentResponding: false })
       if (reconnectTimer.current) clearTimeout(reconnectTimer.current)
       const ws = wsRef.current
       if (ws && ws.readyState !== WebSocket.CLOSED) ws.close()
@@ -143,6 +147,7 @@ export function useWebSocket(onClearQueue?: () => void) {
       // is falsy (app/gateway/schemas.py).
       voice: currentVoice,
     }
+    useChatStore.setState({ isAgentResponding: true })
     ws.send(JSON.stringify(payload))
   }, [])
 

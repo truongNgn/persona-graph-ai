@@ -1,0 +1,22 @@
+.voice-mode-picker { display: flex; gap: 4px; padding: 4px; align-self: flex-start; background: #111827; border: 1px solid #293548; border-radius: 10px; }
+.voice-mode-picker button, .live-buttons button { font: inherit; font-size: 12px; border: 1px solid transparent; border-radius: 7px; padding: 8px 12px; color: #cbd5e1; background: transparent; cursor: pointer; }
+.voice-mode-picker button[aria-pressed="true"] { background: #334155; color: #f8fafc; }
+.voice-mode-picker button:disabled, .live-buttons button:disabled { opacity: .45; cursor: default; }
+.voice-mode-picker button:focus-visible, .live-buttons button:focus-visible { outline: 2px solid #5eead4; outline-offset: 2px; }
+.live-conversation { padding: 16px; border: 1px solid #334155; border-radius: 14px; background: linear-gradient(125deg, #142337, #10232b); color: #e2e8f0; }
+.live-conversation.is-active { border-color: #2d8b81; }
+.live-conversation-heading, .live-conversation-controls { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.live-conversation-heading strong { font-size: 14px; }
+.live-conversation-heading p { font-size: 12px; line-height: 1.6; color: #a5b4c7; margin: 5px 0 12px; }
+.live-mode-tag { font-size: 10px; color: #99f6e4; border: 1px solid #2d625e; border-radius: 99px; padding: 4px 8px; }
+.live-conversation-status { display: flex; align-items: center; gap: 8px; font-size: 12px; min-height: 32px; }
+.live-status-dot { width: 7px; height: 7px; border-radius: 50%; background: #64748b; flex-shrink: 0; }
+.live-status-dot.is-active { background: #5eead4; box-shadow: 0 0 10px #2dd4bf55; }
+.live-buttons { display: flex; gap: 6px; flex-wrap: wrap; }
+.live-buttons button { border-color: #3b5265; background: #182b3c; }
+.live-buttons .live-start { background: #0f766e; border-color: #2dd4bf; color: white; }
+.live-buttons .live-end { color: #fecaca; border-color: #824b56; }
+.live-hint { color: #94a3b8; font-size: 11px; line-height: 1.6; margin: 12px 0 0; }
+.live-meter { display: block; width: 100%; height: 8px; margin-top: 10px; }
+.live-error { color: #fecaca; font-size: 12px; line-height: 1.6; margin-top: 10px; }
+@media (max-width: 600px) { .live-conversation { padding: 12px; } .live-buttons { width: 100%; } .voice-mode-picker button { padding: 8px; } }

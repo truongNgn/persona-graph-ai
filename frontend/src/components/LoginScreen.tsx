@@ -5,7 +5,7 @@ import { API_BASE_URL } from '../config/backend'
 
 export function LoginScreen() {
   const { authLoading, authError, login, register, loginGoogle, devLogin } = useChatStore()
-  const [devLoginEnabled, setDevLoginEnabled] = useState(false)
+  const [devLoginStatus, setDevLoginStatus] = useState<'checking' | 'enabled' | 'disabled' | 'unavailable'>('checking')
   const [mode, setMode] = useState<'login' | 'register'>('login')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -15,11 +15,21 @@ export function LoginScreen() {
 
   useEffect(() => {
     const controller = new AbortController()
-    void fetch(`${API_BASE_URL}/api/auth/dev-status`, { signal: controller.signal })
-      .then(async (response) => response.ok ? await response.json() as { enabled: boolean } : null)
-      .then((status) => { if (!controller.signal.aborted) setDevLoginEnabled(status?.enabled === true) })
-      .catch(() => {})
-    return () => controller.abort()
+    let retry: ReturnType<typeof setTimeout> | undefined
+    const check = async () => {
+      try {
+        const response = await fetch(`${API_BASE_URL}/api/auth/dev-status`, { signal: controller.signal })
+        if (!response.ok) throw new Error('Backend unavailable')
+        const status = await response.json() as { enabled: boolean }
+        if (!controller.signal.aborted) setDevLoginStatus(status.enabled === true ? 'enabled' : 'disabled')
+      } catch {
+        if (controller.signal.aborted) return
+        setDevLoginStatus('unavailable')
+        retry = setTimeout(() => void check(), 3000)
+      }
+    }
+    void check()
+    return () => { controller.abort(); if (retry) clearTimeout(retry) }
   }, [])
 
   useEffect(() => {
@@ -70,10 +80,18 @@ export function LoginScreen() {
         <h1 style={s.title}>Interactive AI Chatbot</h1>
         <p style={s.subtitle}>Sign in to start chatting with your AI agent</p>
 
-        {devLoginEnabled && (
-          <button type="button" disabled={authLoading} onClick={() => void devLogin()} style={s.devBtn}>
-            {authLoading ? 'Working...' : 'Quick login as Dev Tester'}
-          </button>
+        {(devLoginStatus === 'enabled' || (import.meta.env.DEV && devLoginStatus !== 'disabled')) && (
+          <>
+            <button type="button" disabled={authLoading || devLoginStatus !== 'enabled'}
+              onClick={() => void devLogin()} style={{ ...s.devBtn, opacity: devLoginStatus === 'enabled' ? 1 : 0.5 }}>
+              {authLoading ? 'Working...' : 'Quick login as Dev Tester'}
+            </button>
+            {devLoginStatus !== 'enabled' && (
+              <div role="status" style={s.devStatus}>
+                {devLoginStatus === 'checking' ? 'Checking developer login…' : 'Waiting for the local backend. Developer login will enable automatically when it connects.'}
+              </div>
+            )}
+          </>
         )}
 
         <div style={s.tabs}>
@@ -146,6 +164,7 @@ export function LoginScreen() {
 }
 
 const s: Record<string, CSSProperties> = {
+  devStatus: { fontSize: 11, color: '#94a3b8', lineHeight: 1.5 },
   devBtn: {
     border: '1px solid rgba(52,211,153,0.45)',
     borderRadius: 8,

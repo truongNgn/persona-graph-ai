@@ -6,6 +6,8 @@
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react'
 import { API_BASE_URL } from '../config/backend'
 import { useSpeechInput } from '../hooks/useSpeechInput'
+import { useLiveConversation } from '../hooks/useLiveConversation'
+import './ChatInterface.css'
 import { useChatStore } from '../store/chatStore'
 import { CharacterPicker } from './CharacterPicker'
 import type { Emotion } from '../types'
@@ -13,9 +15,7 @@ import type { Emotion } from '../types'
 interface ChatInterfaceProps {
   sendMessage: (text: string) => void
   sendInterrupt: () => void
-  pauseVAD: () => void
-  resumeVAD: () => void
-  getVADStream: () => MediaStream | null
+  preparePlayback: () => Promise<AudioContext | null>
 }
 
 const EMOTION_COLORS: Record<Emotion, string> = {
@@ -30,17 +30,18 @@ const EMOTION_COLORS: Record<Emotion, string> = {
 export function ChatInterface({
   sendMessage,
   sendInterrupt,
-  pauseVAD,
-  resumeVAD,
-  getVADStream,
+  preparePlayback,
 }: ChatInterfaceProps) {
   const [inputText, setInputText] = useState('')
+  const [voiceMode, setVoiceMode] = useState<'record' | 'live'>('record')
   const messagesEndRef = useRef<HTMLDivElement>(null)
 
   const {
     messages,
     wsStatus,
     isAISpeaking,
+    isAgentResponding,
+    setTtsEnabled,
     currentEmotion,
     ttsEnabled,
     autoSendVoiceTranscript,
@@ -81,11 +82,9 @@ export function ChatInterface({
 
   const speechInput = useSpeechInput({
     onTranscript: handleVoiceTranscript,
-    pauseVAD,
-    resumeVAD,
-    getStream: getVADStream,
     maxRecordingSeconds: 60,
   })
+  const live = useLiveConversation(sendUserText, speechInput.microphoneId)
   const voiceInputBusy = (
     speechInput.state === 'listening' ||
     speechInput.state === 'recording' ||
@@ -149,7 +148,7 @@ export function ChatInterface({
 
   const isEmpty = messages.length === 0
   const warmupRunning = warmupStatus?.status === 'running'
-  const micDisabled = wsStatus !== 'open' || !speechInput.supported || speechInput.permissionDenied
+  const micDisabled = wsStatus !== 'open' || !speechInput.supported || speechInput.state === 'processing' || speechInput.state === 'uploading'
   const voiceStateLabels: Record<string, string> = {
     idle: '',
     listening: 'Listening',
@@ -237,13 +236,59 @@ export function ChatInterface({
 
       {/* ── Input area ──────────────────────────────────── */}
       <div style={s.inputWrap}>
+        <div className="voice-mode-picker" role="group" aria-label="Voice input mode">
+          <button aria-pressed={voiceMode === 'record'} disabled={voiceInputBusy || live.active}
+            onClick={() => setVoiceMode('record')}>Record a message</button>
+          <button aria-pressed={voiceMode === 'live'} disabled={voiceInputBusy || live.active}
+            onClick={() => setVoiceMode('live')}>Live conversation</button>
+        </div>
+        {voiceMode === 'live' && (
+          <div className={`live-conversation ${live.active ? 'is-active' : ''}`}>
+            <div className="live-conversation-heading">
+              <div>
+                <strong>Talk naturally with your agent</strong>
+                <p>{live.active ? 'Your mic stays connected. Pause briefly to send your turn.' : 'Start once, speak, and hear replies. Your next turn starts automatically.'}</p>
+              </div>
+              <span className="live-mode-tag">Hands-free</span>
+            </div>
+            <div className="live-conversation-controls">
+              <div className="live-conversation-status" role="status">
+                <span className={`live-status-dot ${live.active ? 'is-active' : ''}`} />
+                {live.state === 'off' ? 'Microphone off' : live.state === 'starting' ? 'Connecting microphone…' :
+                  live.state === 'muted' ? 'Microphone muted' : live.state === 'transcribing' ? 'Transcribing your turn…' :
+                  isAISpeaking ? 'Agent speaking' : isAgentResponding || live.state === 'waiting' ? 'Agent thinking…' :
+                  live.state === 'recording' ? 'Hearing you · pause to send' : 'Listening · go ahead'}
+              </div>
+              <div className="live-buttons">
+                {live.active ? (
+                  <>
+                    <button onClick={live.toggleMute} disabled={live.state === 'starting'}
+                      aria-pressed={live.state === 'muted'}>{live.state === 'muted' ? 'Unmute' : 'Mute mic'}</button>
+                    {(isAISpeaking || isAgentResponding) && <button onClick={sendInterrupt}>Stop reply</button>}
+                    <button className="live-end" onClick={() => { live.stop(); sendInterrupt() }}>End conversation</button>
+                  </>
+                ) : (
+                  <button className="live-start" disabled={micDisabled} onClick={() => {
+                    void preparePlayback()
+                    setTtsEnabled(true)
+                    if (isAISpeaking || isAgentResponding) sendInterrupt()
+                    void live.start()
+                  }}>Start conversation</button>
+                )}
+              </div>
+            </div>
+            {live.active && <meter className="live-meter" aria-label="Live microphone level" min={0} max={1} value={live.level} />}
+            <p className="live-hint">Listening pauses during replies. Use Stop reply to take your next turn. Switching chats or leaving this tab ends the microphone session.</p>
+            {live.error && <div className="live-error" role="alert">{live.error}</div>}
+          </div>
+        )}
         <div style={s.inputBox}>
           <textarea
             value={inputText}
             onChange={(e) => setInputText(e.target.value)}
             onKeyDown={handleKeyDown}
             placeholder={wsStatus === 'open' ? 'Message AI...' : 'Connecting...'}
-            disabled={wsStatus !== 'open'}
+            disabled={wsStatus !== 'open' || live.active}
             rows={2}
             style={s.textarea}
           />
@@ -253,7 +298,7 @@ export function ChatInterface({
                 ◼
               </button>
             )}
-            <div
+            {voiceMode === 'record' && <div
               style={{
                 ...s.micWrap,
                 transform: `scale(${1 + speechInput.micLevel * 0.06})`,
@@ -272,6 +317,7 @@ export function ChatInterface({
                   opacity: micDisabled ? 0.4 : 1,
                 }}
                 title={micTitle}
+                aria-label={speechInput.state === 'recording' ? 'Stop recording and transcribe' : 'Record voice message'}
               >
                 {speechInput.state === 'uploading' || speechInput.state === 'processing'
                   ? '…'
@@ -281,13 +327,13 @@ export function ChatInterface({
                       ? '!'
                       : '🎤'}
               </button>
-            </div>
+            </div>}
             <button
               onClick={handleSend}
-              disabled={wsStatus !== 'open' || !inputText.trim()}
+              disabled={wsStatus !== 'open' || !inputText.trim() || live.active}
               style={{
                 ...s.sendBtn,
-                opacity: wsStatus !== 'open' || !inputText.trim() ? 0.4 : 1,
+                opacity: wsStatus !== 'open' || !inputText.trim() || live.active ? 0.4 : 1,
               }}
               title="Send (Enter)"
             >
@@ -303,7 +349,7 @@ export function ChatInterface({
               id="microphone-device"
               value={speechInput.microphoneId}
               onChange={(event) => speechInput.setMicrophoneId(event.target.value)}
-              disabled={voiceInputBusy}
+              disabled={voiceInputBusy || live.active}
               style={{ maxWidth: 230, background: '#111827', color: '#cbd5e1', border: '1px solid #334155', borderRadius: 4 }}
             >
               <option value="">System default</option>
