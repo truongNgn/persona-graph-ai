@@ -7,6 +7,7 @@ import logging
 from collections.abc import AsyncIterator
 
 from app.agents.base import AgentContext
+from app.observability import langfuse_callbacks, langfuse_metadata
 
 logger = logging.getLogger(__name__)
 
@@ -18,8 +19,17 @@ class RoleplayChatAgent:
         from app.lc_graph import graph
 
         token_queue: asyncio.Queue[str | None] = asyncio.Queue()
+
+        async def invoke_graph(state: dict, config: dict) -> None:
+            try:
+                await graph.ainvoke(state, config=config)
+            finally:
+                # Also terminate consumers when retrieval/model setup fails before
+                # generate_node can send its own sentinel.
+                await token_queue.put(None)
+
         graph_task = asyncio.create_task(
-            graph.ainvoke(
+            invoke_graph(
                 {
                     "user_id": context.user_id,
                     "session_id": context.session_id,
@@ -33,6 +43,7 @@ class RoleplayChatAgent:
                 },
                 config={
                     "run_name": "interactive_chatbot_turn",
+                    "callbacks": langfuse_callbacks(),
                     "tags": [
                         "websocket",
                         "langgraph",
@@ -41,6 +52,7 @@ class RoleplayChatAgent:
                         f"provider:{context.provider}",
                     ],
                     "metadata": {
+                        **langfuse_metadata(context.user_id, context.character_id, context.session_id),
                         "turn_id": context.turn_id,
                         "session_id": context.session_id,
                         "user_id": context.user_id,
@@ -60,7 +72,10 @@ class RoleplayChatAgent:
                     break
                 yield token
             await graph_task
-        except Exception:
+        finally:
             if not graph_task.done():
                 graph_task.cancel()
-            raise
+                try:
+                    await graph_task
+                except asyncio.CancelledError:
+                    pass

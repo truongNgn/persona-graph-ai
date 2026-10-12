@@ -1,10 +1,22 @@
 import type { CSSProperties } from 'react'
+import { useEffect, useState } from 'react'
 import { useChatStore } from '../store/chatStore'
+import { API_BASE_URL } from '../config/backend'
 
 // Rendered only inside the authenticated app (see App.tsx / LoginScreen.tsx
 // for the pre-login flow), so authUser is always present here.
 export function AuthPanel() {
-  const { authUser, logout, refreshServerConversations } = useChatStore()
+  const { authUser, authToken, logout, refreshServerConversations } = useChatStore()
+  const [admin, setAdmin] = useState(false)
+  useEffect(() => {
+    const controller = new AbortController()
+    setAdmin(false)
+    if (authToken) void fetch(`${API_BASE_URL}/api/admin/monitoring/access`, {
+      headers: { Authorization: `Bearer ${authToken}` }, signal: controller.signal,
+    }).then(async response => response.ok ? response.json() as Promise<{ allowed: boolean }> : { allowed: false })
+      .then(result => setAdmin(result.allowed)).catch(() => {})
+    return () => controller.abort()
+  }, [authToken])
 
   if (!authUser) return null
 
@@ -15,6 +27,7 @@ export function AuthPanel() {
         <span style={s.userText}>{authUser.display_name || authUser.email || 'Signed in'}</span>
       </div>
       <div style={s.actions}>
+        {admin && <a href="/admin/monitoring" style={{ ...s.secondaryBtn, textDecoration: 'none' }}>Admin</a>}
         <button onClick={() => void refreshServerConversations()} style={s.secondaryBtn}>
           Sync
         </button>

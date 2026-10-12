@@ -7,10 +7,12 @@ import { useWebSocket } from './hooks/useWebSocket'
 import { useAudioQueue } from './hooks/useAudioQueue'
 import { useVAD } from './hooks/useVAD'
 import { useChatStore } from './store/chatStore'
+import { AdminDashboard } from './components/AdminDashboard'
 
 export function App() {
   const authUser = useChatStore((state) => state.authUser)
   if (!authUser) return <LoginScreen />
+  if (window.location.pathname === '/admin/monitoring') return <AdminDashboard />
   return <AuthenticatedApp />
 }
 

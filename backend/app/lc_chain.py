@@ -100,6 +100,7 @@ def _build_llm(info: ModelInfo) -> BaseChatModel:
                 base_url=DEEPSEEK_BASE_URL,
                 api_key=settings.deepseek_api_key,
                 streaming=True,
+                stream_usage=True,
             )
         else:
             # Local OpenAI-compatible inference
@@ -108,6 +109,7 @@ def _build_llm(info: ModelInfo) -> BaseChatModel:
                 base_url=settings.local_llm_base_url,
                 api_key="not-needed",
                 streaming=True,
+                stream_usage=True,
                 max_tokens=settings.local_llm_max_tokens,
             )
     elif info.runtime == "google-genai":

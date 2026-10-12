@@ -10,6 +10,15 @@ Gateway -> Orchestrator -> AgentRegistry -> Agent -> ToolRegistry -> Guardrails 
 
 See the [local runtime guides](docs/guides/README.md) for setup, GPU tuning, microphone input, validation and rollback.
 
+Model monitoring supports optional **Langfuse** traces for every chat provider,
+with streamed generations, errors/fallbacks, token usage, and scoped sessions.
+Set project keys and `LANGFUSE_ENABLED=true` in `backend/.env`, then restart the
+backend. See [Langfuse setup](docs/guides/LANGFUSE.md) for native and Docker steps.
+The built-in `/admin/monitoring` dashboard shows model usage, cost, latency,
+errors and generation details. Allow existing accounts with backend `ADMIN_EMAILS`
+or `ADMIN_USER_IDS` in local mode; cloud access requires existing account IDs in
+`ADMIN_USER_IDS`. Email allowlists grant access only in local mode.
+
 ## Local inference on E: (WSL Docker + llama.cpp)
 
 The default chat provider is llama.cpp CUDA, serving `Qwen/Qwen2.5-1.5B-Instruct-GGUF` (Q4_K_M)
