@@ -4,12 +4,16 @@ import asyncio
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
+from uuid import uuid4
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from fastapi.responses import Response
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+from app.models import SentenceChunk
+from app.voice_references import normalize_reference, owns_voice_reference
 
 from app.auth import AuthContext, get_request_auth_context, issue_dev_token
 from app.character_registry import character_registry
@@ -338,15 +342,31 @@ async def remove_conversation(
 @app.get("/api/voices")
 async def get_voices(auth: AuthContext = Depends(get_request_auth_context)):
     voices = []
-    if settings.tts_provider == "kokoro":
+    if settings.tts_provider in {"kokoro", "chatterbox-nano"}:
+        presets = ["af_bella", "am_michael"]
+        clone_ready = False
+        clone_status = "unavailable"
         try:
             async with httpx.AsyncClient(timeout=5.0) as client:
                 response = await client.get(settings.kokoro_tts_url.rsplit("/", 1)[0] + "/voices")
                 response.raise_for_status()
-                return {"voices": response.json()["voices"], "provider": "kokoro", "supports_voice_cloning": False}
+                presets = response.json()["voices"]
         except Exception as exc:
             logger.warning("Kokoro voice discovery failed: %s", exc)
-            return {"voices": ["af_bella", "am_michael"], "provider": "kokoro", "supports_voice_cloning": False}
+        cloning = settings.tts_provider == "chatterbox-nano"
+        if cloning:
+            voices_dir = BACKEND_ROOT / "voices" / auth.user_id
+            if voices_dir.is_dir():
+                voices = [f"{auth.user_id}/{p.name}" for p in voices_dir.glob("*.wav") if p.is_file()]
+            try:
+                async with httpx.AsyncClient(timeout=3.0) as client:
+                    status = await client.get(settings.chatterbox_tts_url.rsplit("/", 1)[0] + "/health")
+                    clone_ready = status.status_code == 200 and status.json().get("model_loaded") is True
+                    clone_status = status.json().get("status", "unavailable")
+            except Exception:
+                pass
+        return {"voices": sorted(voices) + presets, "provider": settings.tts_provider,
+                "supports_voice_cloning": cloning, "clone_ready": clone_ready, "clone_status": clone_status}
 
     if settings.gcs_bucket_name:
         try:
@@ -375,12 +395,54 @@ async def get_voices(auth: AuthContext = Depends(get_request_auth_context)):
     return {"voices": sorted(voices)}
 
 
+class VoicePreviewRequest(BaseModel):
+    voice: str = Field(min_length=1, max_length=240)
+    text: str = Field(default="Hello. This is a preview of my voice.", min_length=1, max_length=300)
+
+
+@app.post("/api/voices/preview")
+async def preview_voice(payload: VoicePreviewRequest, auth: AuthContext = Depends(get_request_auth_context)):
+    if settings.tts_provider not in {"kokoro", "chatterbox-nano"}:
+        raise HTTPException(400, "Voice preview is unavailable for this provider.")
+    reference = "/" in payload.voice or "\\" in payload.voice
+    if reference:
+        if settings.tts_provider != "chatterbox-nano" or not owns_voice_reference(payload.voice, auth.user_id):
+            raise HTTPException(403, "You can only preview your own voice recordings.")
+        if not (BACKEND_ROOT / "voices" / payload.voice).is_file():
+            raise HTTPException(404, "Voice recording not found.")
+    url = settings.chatterbox_tts_url if reference else settings.kokoro_tts_url
+    try:
+        async with httpx.AsyncClient(timeout=settings.chatterbox_tts_timeout_seconds) as client:
+            result = await client.post(url, json={"voice": payload.voice, "text": payload.text})
+            result.raise_for_status()
+    except httpx.HTTPError as exc:
+        # Preview must never silently substitute a different speaker.
+        raise HTTPException(503, "Voice preview failed. The cloning model may still be loading.") from exc
+    return Response(result.content, media_type="audio/wav")
+
+
 @app.post("/api/voices/upload")
 async def upload_voice(
     file: UploadFile = File(...),
     auth: AuthContext = Depends(get_request_auth_context)
 ):
     ext = Path(file.filename).suffix.lower() if file.filename else ""
+    if settings.tts_provider == "chatterbox-nano":
+        if ext not in SUPPORTED_VOICE_SUFFIXES | {".webm", ".mp4"}:
+            raise HTTPException(400, "Upload a WAV, MP3, or browser audio recording.")
+        content = await file.read(settings.voice_max_file_mb * 1024 * 1024 + 1)
+        if len(content) > settings.voice_max_file_mb * 1024 * 1024:
+            raise HTTPException(413, f"Voice recording exceeds {settings.voice_max_file_mb} MB.")
+        try:
+            normalized, duration = await asyncio.to_thread(normalize_reference, content)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        stem = "".join(c for c in Path(file.filename or "recording").stem if c.isalnum() or c in "-_")[:40] or "recording"
+        filename = f"{stem}-{uuid4().hex[:12]}.wav"
+        voices_dir = BACKEND_ROOT / "voices" / auth.user_id
+        voices_dir.mkdir(parents=True, exist_ok=True)
+        await asyncio.to_thread((voices_dir / filename).write_bytes, normalized)
+        return {"filename": f"{auth.user_id}/{filename}", "duration_seconds": duration}
     if ext not in SUPPORTED_VOICE_SUFFIXES:
         raise HTTPException(
             status_code=400,

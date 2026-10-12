@@ -1,4 +1,4 @@
-import { Suspense, lazy, useEffect, useState } from 'react'
+import { Suspense, lazy, useEffect, useRef, useState } from 'react'
 import { useChatStore } from '../store/chatStore'
 import { ErrorBoundary } from './ErrorBoundary'
 import { API_BASE_URL } from '../config/backend'
@@ -84,6 +84,18 @@ export function RightSidebar() {
   const [models, setModels] = useState<string[]>([])
   const [voices, setVoices] = useState<string[]>([])
   const [supportsVoiceCloning, setSupportsVoiceCloning] = useState(true)
+  const [cloneReady, setCloneReady] = useState(false)
+  const [cloneStatus, setCloneStatus] = useState('loading')
+  const [voiceError, setVoiceError] = useState<string | null>(null)
+  const [recordingVoice, setRecordingVoice] = useState(false)
+  const [recordingSeconds, setRecordingSeconds] = useState(0)
+  const [previewingVoice, setPreviewingVoice] = useState(false)
+  const voiceRecorderRef = useRef<MediaRecorder | null>(null)
+  const voiceCaptureEpochRef = useRef(0)
+  const voiceStreamRef = useRef<MediaStream | null>(null)
+  const voiceTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const previewRef = useRef<HTMLAudioElement | null>(null)
+  const previewUrlRef = useRef<string | null>(null)
   const [customModelName, setCustomModelName] = useState<string | null>(null)
   const [customModelFile, setCustomModelFile] = useState<File | null>(null)
   const [uploadingVoice, setUploadingVoice] = useState(false)
@@ -114,9 +126,11 @@ export function RightSidebar() {
       })
       .then((data) => {
           setSupportsVoiceCloning(data.supports_voice_cloning !== false)
+          setCloneReady(data.clone_ready === true)
+          setCloneStatus(data.clone_status || 'loading')
         if (data.voices && data.voices.length > 0) {
           setVoices(data.voices)
-            if (data.provider === 'kokoro' && !data.voices.includes(useChatStore.getState().currentVoice)) {
+            if (['kokoro', 'chatterbox-nano'].includes(data.provider) && !data.voices.includes(useChatStore.getState().currentVoice)) {
               setCurrentVoice('')
             }
         }
@@ -165,11 +179,9 @@ export function RightSidebar() {
     }
   }
 
-  const handleVoiceUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]
-    if (!file) return
-
+  const uploadVoiceFile = async (file: File) => {
     setUploadingVoice(true)
+    setVoiceError(null)
     const formData = new FormData()
     formData.append('file', file)
 
@@ -185,7 +197,10 @@ export function RightSidebar() {
         useChatStore.getState().logout()
         return
       }
-      if (!res.ok) throw new Error(await res.text())
+      if (!res.ok) {
+        const failure = await res.json().catch(() => null) as { detail?: string } | null
+        throw new Error(failure?.detail || 'Voice upload failed.')
+      }
       const data = await res.json()
 
       // Refresh voices list
@@ -195,17 +210,127 @@ export function RightSidebar() {
         return
       }
       const voicesData = await voicesRes.json()
+      setCloneReady(voicesData.clone_ready === true)
+      setCloneStatus(voicesData.clone_status || 'loading')
       if (voicesData.voices) {
         setVoices(voicesData.voices)
         setCurrentVoice(data.filename)
       }
     } catch (err) {
       console.error('Failed to upload voice', err)
-      alert('Failed to upload voice: ' + (err instanceof Error ? err.message : String(err)))
+      setVoiceError(err instanceof Error ? err.message : 'Voice upload failed.')
     } finally {
       setUploadingVoice(false)
     }
   }
+
+  const handleVoiceUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (file) void uploadVoiceFile(file)
+    e.target.value = ''
+  }
+
+  const stopVoiceRecording = () => {
+    voiceCaptureEpochRef.current += 1
+    if (voiceTimerRef.current) clearInterval(voiceTimerRef.current)
+    voiceTimerRef.current = null
+    if (voiceRecorderRef.current?.state === 'recording') voiceRecorderRef.current.stop()
+    else setRecordingVoice(false)
+  }
+
+  const recordVoice = async () => {
+    if (recordingVoice || voiceRecorderRef.current) return
+    setVoiceError(null)
+    setRecordingVoice(true)
+    setRecordingSeconds(0)
+    const epoch = ++voiceCaptureEpochRef.current
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      if (epoch !== voiceCaptureEpochRef.current) {
+        stream.getTracks().forEach((track) => track.stop())
+        return
+      }
+      voiceStreamRef.current = stream
+      const recorder = new MediaRecorder(stream)
+      voiceRecorderRef.current = recorder
+      const chunks: BlobPart[] = []
+      recorder.ondataavailable = (event) => { if (event.data.size) chunks.push(event.data) }
+      recorder.onstop = () => {
+        stream.getTracks().forEach((track) => track.stop())
+        voiceStreamRef.current = null
+        voiceRecorderRef.current = null
+        setRecordingVoice(false)
+        const extension = recorder.mimeType.includes('mp4') ? 'mp4' : 'webm'
+        void uploadVoiceFile(new File(chunks, `my-voice.${extension}`, { type: recorder.mimeType }))
+      }
+      recorder.start()
+      let seconds = 0
+      voiceTimerRef.current = setInterval(() => {
+        seconds += 1
+        setRecordingSeconds(seconds)
+        if (seconds >= 12) stopVoiceRecording()
+      }, 1000)
+    } catch (error) {
+      voiceStreamRef.current?.getTracks().forEach((track) => track.stop())
+      voiceStreamRef.current = null
+      voiceRecorderRef.current = null
+      setRecordingVoice(false)
+      setVoiceError(error instanceof Error ? error.message : 'Microphone access failed.')
+    }
+  }
+
+  const previewVoice = async () => {
+    setVoiceError(null)
+    setPreviewingVoice(true)
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/voices/preview`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+        body: JSON.stringify({ voice: currentVoice || currentCharacter?.voice || 'af_bella' }),
+      })
+      if (!response.ok) {
+        const failure = await response.json().catch(() => null) as { detail?: string } | null
+        throw new Error(failure?.detail || 'Voice preview failed.')
+      }
+      if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current)
+      const url = URL.createObjectURL(await response.blob())
+      previewUrlRef.current = url
+      const audio = new Audio(url)
+      previewRef.current = audio
+      audio.onended = () => { setPreviewingVoice(false); URL.revokeObjectURL(url); previewUrlRef.current = null }
+      audio.onerror = () => { setPreviewingVoice(false); setVoiceError('Could not play the voice preview.') }
+      await audio.play()
+    } catch (error) {
+      setPreviewingVoice(false)
+      setVoiceError(error instanceof Error ? error.message : 'Voice preview failed.')
+    }
+  }
+
+  useEffect(() => () => {
+    voiceCaptureEpochRef.current += 1
+    if (voiceTimerRef.current) clearInterval(voiceTimerRef.current)
+    const recorder = voiceRecorderRef.current
+    if (recorder) {
+      recorder.onstop = null
+      if (recorder.state !== 'inactive') recorder.stop()
+    }
+    voiceStreamRef.current?.getTracks().forEach((track) => track.stop())
+    previewRef.current?.pause()
+    if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current)
+  }, [])
+
+  useEffect(() => {
+    if (!supportsVoiceCloning || cloneReady || !authToken) return
+    const timer = setInterval(() => {
+      void fetch(`${API_BASE_URL}/api/voices`, { headers: { Authorization: `Bearer ${authToken}` } })
+        .then((response) => response.ok ? response.json() : null)
+        .then((data) => {
+          if (data?.clone_status) setCloneStatus(data.clone_status)
+          if (data?.clone_ready) setCloneReady(true)
+        })
+        .catch(() => {})
+    }, 10000)
+    return () => clearInterval(timer)
+  }, [supportsVoiceCloning, cloneReady, authToken])
 
   return (
     <div style={s.sidebar}>
@@ -261,22 +386,39 @@ export function RightSidebar() {
           options={voices}
           fallbackLabel={currentVoice}
           getOptionValue={(voice) => voice}
-          getOptionLabel={(voice) => voice.replace(/\.wav$/i, '')}
+          getOptionLabel={(voice) => (voice.split('/').pop() || voice).replace(/-[0-9a-f]{12}\.wav$/i, '').replace(/\.wav$/i, '')}
           onChange={setCurrentVoice}
         />
 
           {supportsVoiceCloning && <div style={s.uploadRow}>
           <label style={s.uploadBtn}>
-            🎙️ Upload voice sample (.wav)
+            🎙️ Upload voice recording
             <input
               type="file"
-              accept=".wav,.mp3"
+              accept=".wav,.mp3,.webm,.m4a"
+              disabled={uploadingVoice || recordingVoice}
               onChange={handleVoiceUpload}
               style={{ display: 'none' }}
             />
           </label>
           {uploadingVoice && <span style={s.fileName}>Uploading...</span>}
           </div>}
+
+        {supportsVoiceCloning && (
+          <div style={{ color: '#94a3b8', fontSize: 11, marginTop: 8 }}>
+            <p>Use 10–15 seconds of clear English speech. Record once and reuse the voice.</p>
+            {typeof MediaRecorder !== 'undefined' && (
+              <button style={s.uploadBtn} disabled={uploadingVoice} onClick={() => recordingVoice ? stopVoiceRecording() : void recordVoice()}>
+                {recordingVoice ? `Stop recording · ${recordingSeconds}/12s` : 'Record my voice (12 seconds)'}
+              </button>
+            )}
+            {!cloneReady && <p>{cloneStatus === 'loading' ? 'The cloning model is warming up.' : 'Voice cloning is currently unavailable.'} Preset voices remain available.</p>}
+          </div>
+        )}
+        <button style={{ ...s.uploadBtn, marginTop: 8 }} disabled={previewingVoice || uploadingVoice || recordingVoice} onClick={() => void previewVoice()}>
+          {previewingVoice ? 'Playing / preparing preview…' : 'Preview voice'}
+        </button>
+        {voiceError && <p style={{ color: '#fca5a5', fontSize: 11 }}>{voiceError}</p>}
 
         <div style={s.divider} />
       </div>

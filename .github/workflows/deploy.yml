@@ -24,7 +24,7 @@ jobs:
           cd backend
           pip install uv
           uv pip install -r requirements-prod.txt --system
-          uv pip install pytest --system
+          uv pip install pytest soundfile --system
 
       - name: Run Pytest
         run: |

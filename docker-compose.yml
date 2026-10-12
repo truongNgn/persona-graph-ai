@@ -85,6 +85,26 @@ services:
       retries: 5
     restart: unless-stopped
 
+  chatterbox:
+    profiles: [app]
+    build: ./chatterbox-service
+    environment:
+      CHATTERBOX_CPU_THREADS: "4"
+    volumes:
+      - chatterbox_models:/models
+      - voice_samples:/voices:ro
+    cpus: 4
+    mem_limit: 4g
+    ports:
+      - "127.0.0.1:8881:8080"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/health', timeout=5)"]
+      interval: 15s
+      timeout: 5s
+      start_period: 15m
+      retries: 5
+    restart: unless-stopped
+
   backend:
     profiles: [app]
     build: ./backend
@@ -93,7 +113,8 @@ services:
       # Override host để trỏ sang ollama service thay vì localhost
       OLLAMA_HOST: http://ollama:11434
       LLM_PROVIDER: llama_cpp
-      TTS_PROVIDER: kokoro
+      TTS_PROVIDER: chatterbox-nano
+      CHATTERBOX_TTS_URL: http://chatterbox:8080/synthesize
       KOKORO_TTS_URL: http://kokoro:8080/synthesize
       LOCAL_LLM_BASE_URL: http://llama-cpp:8080/v1
       LOCAL_LLM_LARGE_MODEL: persona-qwen
@@ -107,6 +128,7 @@ services:
       - chroma_data:/app/chroma_data
       - session_history:/app/data/session_history
       - stt_cache:/root/.cache/huggingface
+      - voice_samples:/app/voices
       - ./characters:/characters:ro
       - ./backend/lore_data:/app/lore_data:ro
     depends_on:
@@ -118,6 +140,8 @@ services:
         condition: service_healthy
       kokoro:
         condition: service_healthy
+      chatterbox:
+        condition: service_started
     ports:
       - "127.0.0.1:8001:8000"
     restart: unless-stopped
@@ -140,3 +164,5 @@ volumes:
     name: persona-graph-ai_llama_models
     external: true
   stt_cache:
+  voice_samples:
+  chatterbox_models:

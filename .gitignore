@@ -51,6 +51,7 @@ backend/chroma_data/
 backend/lore_data/
 backend/data/feedback/*.jsonl
 backend/data/session_history/
+backend/data/wsl-keepalive.pid
 
 # Bỏ qua các file log lỗi (tùy chọn nhưng nên có)
 npm-debug.log*
