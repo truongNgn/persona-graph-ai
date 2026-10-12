@@ -44,6 +44,8 @@ from app.warmup import start_background_warmup, warmup_state
 from app.model_registry import model_registry
 from app.model_availability import is_model_available
 from app.lc_chain import resolve_model_info
+from app.observability import initialize_langfuse, shutdown_langfuse
+from app.admin_monitoring import router as admin_monitoring_router
 
 logging.basicConfig(
     level=settings.log_level.upper(),
@@ -100,6 +102,7 @@ async def lifespan(app: FastAPI):
     # ── TTS handler setup ─────────────────────────────────────────────────────
     # Heavy LLM/XTTS warm-up runs in the background by default so FastAPI can
     # accept WebSocket connections immediately after the process starts.
+    initialize_langfuse()
     tts = get_tts_handler()
     if tts.is_active:
         if tts.provider_name.startswith("elevenlabs"):
@@ -129,6 +132,7 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
+        await shutdown_langfuse()
         if warmup_task and not warmup_task.done():
             warmup_task.cancel()
             try:
@@ -142,6 +146,7 @@ app = FastAPI(
     version="0.2.0",
     lifespan=lifespan,
 )
+app.include_router(admin_monitoring_router)
 
 app.add_middleware(
     CORSMiddleware,

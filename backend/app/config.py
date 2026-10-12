@@ -1,4 +1,5 @@
 import os
+from urllib.parse import urlsplit
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -159,6 +160,17 @@ class Settings(BaseSettings):
     google_client_id: str = ""
     gcs_bucket_name: str = ""
 
+    # Langfuse observability (backend only, opt-in).
+    langfuse_enabled: bool = False
+    langfuse_public_key: str = ""
+    langfuse_secret_key: str = ""
+    langfuse_base_url: str = "https://cloud.langfuse.com"
+    langfuse_environment: str = "development"
+    # Comma-separated existing account IDs/emails allowed to inspect project data.
+    admin_user_ids: str = ""
+    admin_emails: str = ""
+    admin_local_emails: str = ""
+
     # LangSmith Observability
     # Keep both modern LANGSMITH_* and legacy LANGCHAIN_* names so older docs
     # and newer SDKs work from the same .env file.
@@ -181,6 +193,18 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+
+def validated_langfuse_base_url() -> str:
+    """Keep project credentials on a valid endpoint and encrypted in cloud mode."""
+    value = settings.langfuse_base_url.rstrip("/")
+    parsed = urlsplit(value)
+    if (parsed.scheme not in {"http", "https"} or not parsed.hostname
+            or parsed.username or parsed.password or parsed.query or parsed.fragment):
+        raise ValueError("Invalid Langfuse base URL.")
+    if settings.deployment_mode != "local" and parsed.scheme != "https":
+        raise ValueError("Cloud Langfuse connections require HTTPS.")
+    return value
 
 
 def _set_env_alias(primary: str, *fallbacks: str) -> None:

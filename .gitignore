@@ -79,6 +79,7 @@ docs/guides/*
 !docs/guides/WSL_LLAMA_CPP.md
 !docs/guides/WSL_VLLM_MIGRATION.md
 !docs/guides/README.md
+!docs/guides/LANGFUSE.md
 # Local browser automation state and test caches
 .ua/
 .pytest_cache/

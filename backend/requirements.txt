@@ -34,6 +34,7 @@ langchain-openai>=0.2.0
 langchain-chroma>=0.1.0
 langgraph>=0.2.0
 langsmith>=0.1.0
+langfuse>=4,<5
 langchain-google-genai==2.0.11
 google-cloud-texttospeech>=2.17.0
 google-cloud-storage>=2.0.0
